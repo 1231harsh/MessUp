@@ -35,7 +35,7 @@
             </button>
         </div>
 	<script>
-		const socket = new SockJS('http://localhost:8080/chat');
+		const socket = new SockJS('https://messup-production.up.railway.app/chat');
 		const stompClient = Stomp.over(socket);
 		var name="<%= name %>";
 		var coloured="<%= colour %>";
