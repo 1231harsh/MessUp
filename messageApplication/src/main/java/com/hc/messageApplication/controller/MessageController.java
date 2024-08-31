@@ -23,7 +23,8 @@ public class MessageController {
 		System.out.println("inside index method");
 		return "index";
 	}
-	
+
+	@CrossOrigin(origins = "https://messup-production.up.railway.app")
 	@RequestMapping("/home")
 	public String app(@RequestParam("name")String name,HttpSession session) {
 		if(name==null) {
@@ -33,7 +34,8 @@ public class MessageController {
 		session.setAttribute("color",mrs.getRandomColor());
 		return "chat";
 	}
-	
+
+	@CrossOrigin(origins = "https://messup-production.up.railway.app")
 	@MessageMapping("/sent")
 	@SendTo("/topic/sentMeth")
 	 public MessageRS sendMess(@Payload MessageRS mess) throws Exception {
