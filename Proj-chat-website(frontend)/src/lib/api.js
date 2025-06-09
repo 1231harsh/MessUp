@@ -156,6 +156,34 @@ export const getUserById = async (userId) => {
   }
 };
 
+// Get old chat messages for a specific user
+export const getOldChatMessages = async (username) => {
+  try {
+    console.log('Fetching old chat messages for user:', username);
+    const response = await api.get(`/oldChat/${username}`);
+    console.log('Old chat messages response:', response.data);
+
+    // Transform backend message format to frontend format
+    const messages = Array.isArray(response.data) ? response.data : [];
+
+    return messages.map((msg, index) => ({
+      _id: `old-${username}-${index}-${Date.now()}`,
+      senderId: msg.sender,
+      receiverId: msg.receiver,
+      text: msg.message,
+      image: msg.mediaUrl || null,
+      mediaType: msg.mediaType,
+      createdAt: msg.timestamp,
+      isOld: true // Flag to identify old messages
+    }));
+  } catch (error) {
+    console.error('Failed to fetch old chat messages:', error.response?.data || error.message);
+
+    // Return empty array if API fails
+    return [];
+  }
+};
+
 // Get all friends for the current user - NO /api prefix (as per your instruction)
 export const getAllFriends = async () => {
   try {

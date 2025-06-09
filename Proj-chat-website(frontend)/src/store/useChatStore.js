@@ -1,6 +1,7 @@
 import { create } from "zustand";
 import webSocketService from "../lib/websocket";
 import { getCurrentUserFromToken } from "../lib/jwtUtils";
+import { getOldChatMessages } from "../lib/api";
 
 const useChatStore = create((set, get) => ({
   // State
@@ -9,6 +10,7 @@ const useChatStore = create((set, get) => ({
   isConnected: false,
   isLoading: false,
   currentUser: null,
+  loadingOldMessages: {},
 
   // Initialize WebSocket
   initializeWebSocket: async () => {
@@ -44,17 +46,69 @@ const useChatStore = create((set, get) => ({
     set({ isConnected: false });
   },
 
-  // Select user
+  // Load old messages for a user
+  loadOldMessages: async (username) => {
+    const { loadingOldMessages } = get();
+
+    // Prevent multiple simultaneous loads for the same user
+    if (loadingOldMessages[username]) {
+      return;
+    }
+
+    set((state) => ({
+      loadingOldMessages: {
+        ...state.loadingOldMessages,
+        [username]: true
+      }
+    }));
+
+    try {
+      console.log('🔄 Loading old messages for:', username);
+      const oldMessages = await getOldChatMessages(username);
+
+      console.log('📥 Loaded old messages:', oldMessages.length);
+
+      // Sort messages by timestamp (oldest first)
+      const sortedMessages = oldMessages.sort((a, b) =>
+        new Date(a.createdAt) - new Date(b.createdAt)
+      );
+
+      set((state) => ({
+        messages: {
+          ...state.messages,
+          [username]: sortedMessages
+        },
+        loadingOldMessages: {
+          ...state.loadingOldMessages,
+          [username]: false
+        }
+      }));
+
+      return sortedMessages;
+    } catch (error) {
+      console.error('❌ Failed to load old messages:', error);
+
+      set((state) => ({
+        loadingOldMessages: {
+          ...state.loadingOldMessages,
+          [username]: false
+        }
+      }));
+
+      return [];
+    }
+  },
+
+  // Select user and load their old messages
   selectUser: async (user) => {
     set({ selectedUser: user });
 
-    // Initialize empty messages for this user
-    set((state) => ({
-      messages: {
-        ...state.messages,
-        [user.username]: state.messages[user.username] || []
-      }
-    }));
+    // Check if we already have messages for this user
+    const { messages } = get();
+    if (!messages[user.username] || messages[user.username].length === 0) {
+      // Load old messages if we don't have any
+      await get().loadOldMessages(user.username);
+    }
   },
 
   // Send message
@@ -154,6 +208,12 @@ const useChatStore = create((set, get) => ({
   // Get unread count (placeholder)
   getUnreadCountForUser: (username) => {
     return 0;
+  },
+
+  // Check if old messages are loading
+  isLoadingOldMessages: (username) => {
+    const { loadingOldMessages } = get();
+    return loadingOldMessages[username] || false;
   }
 }));
 
