@@ -73,7 +73,7 @@ public class SecurityConfig {
         return request -> {
             CorsConfiguration config = new CorsConfiguration();
             config.setAllowCredentials(true);
-            config.setAllowedOriginPatterns(List.of("http://localhost:5173", "http://127.0.0.1:5501","http://localhost:5174"));
+            config.setAllowedOriginPatterns(List.of("https://messup.vercel.app","http://localhost:5173", "http://127.0.0.1:5501","http://localhost:5174"));
             config.addAllowedHeader("*");
             config.addAllowedMethod("*");
             return config;
