@@ -9,6 +9,8 @@ import jakarta.servlet.http.HttpServletResponse;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.*;
 
+import java.util.Map;
+
 @RestController
 @RequestMapping("/api/auth")
 public class AuthController {
@@ -20,76 +22,66 @@ public class AuthController {
     }
 
     @PostMapping("/register")
-    public AuthResponse register(@RequestBody RegisterRequest request) {
-        return authService.register(request);
+    public ResponseEntity<?> register(@RequestBody RegisterRequest request) {
+        AuthResponse response = authService.register(request);
+        return ResponseEntity.ok(response);
     }
 
     @PostMapping("/login")
-    public ResponseEntity<?> login(@RequestBody LoginRequest request,HttpServletResponse response) {
-
+    public ResponseEntity<?> login(@RequestBody LoginRequest request, HttpServletResponse response) {
         AuthResponse authResponse = authService.login(request);
 
-        Cookie accessToken = new Cookie("jwt", authResponse.getToken());
-        accessToken.setHttpOnly(true);
-        accessToken.setSecure(true);
-        accessToken.setPath("/");
-        accessToken.setMaxAge(60 * 60 * 10); // 10 hours
+        addCookie(response, "jwt", authResponse.getToken(), 60 * 60 * 10);        // 10 hours
+        addCookie(response, "refreshToken", authResponse.getRefreshToken(), 60 * 60 * 24 * 7); // 7 days
 
-        Cookie refreshToken = new Cookie("refreshToken", authResponse.getRefreshToken());
-        refreshToken.setHttpOnly(true);
-        refreshToken.setSecure(true);
-        refreshToken.setPath("/");
-        refreshToken.setMaxAge(60 * 60 * 24 * 7); // 7 days
-
-        response.addCookie(accessToken);
-        response.addCookie(refreshToken);
-
-        return ResponseEntity.ok("Login successful");
+        return ResponseEntity.ok(Map.of("message", "Login successful"));
     }
 
     @PostMapping("/refresh")
-    public ResponseEntity<?> refresh(@CookieValue(value = "refreshToken", required = false) String refreshToken, HttpServletResponse response) {
+    public ResponseEntity<?> refresh(@CookieValue(value = "refreshToken", required = false) String refreshToken,
+                                     HttpServletResponse response) {
         if (refreshToken == null || refreshToken.trim().isEmpty()) {
-            return ResponseEntity.status(401).body("Refresh token missing");
+            return ResponseEntity.status(401).body(Map.of("error", "Refresh token missing"));
         }
 
-        AuthResponse authResponse = authService.refreshToken(refreshToken);
+        try {
+            AuthResponse authResponse = authService.refreshToken(refreshToken);
 
-        Cookie accessToken = new Cookie("jwt", authResponse.getToken());
-        accessToken.setHttpOnly(true);
-        accessToken.setSecure(true);
-        accessToken.setPath("/");
-        accessToken.setMaxAge(60 * 60 * 10); // 10 hours
+            addCookie(response, "jwt", authResponse.getToken(), 60 * 60 * 10);        // 10 hours
+            addCookie(response, "refreshToken", authResponse.getRefreshToken(), 60 * 60 * 24 * 7); // 7 days
 
-        Cookie newRefreshToken = new Cookie("refreshToken", authResponse.getRefreshToken());
-        newRefreshToken.setHttpOnly(true);
-        newRefreshToken.setSecure(true);
-        newRefreshToken.setPath("/");
-        newRefreshToken.setMaxAge(60 * 60 * 24 * 7); // 7 days
-
-        response.addCookie(accessToken);
-        response.addCookie(newRefreshToken);
-
-        return ResponseEntity.ok(authResponse);
+            return ResponseEntity.ok(authResponse);
+        } catch (Exception e) {
+            return ResponseEntity.status(401).body(Map.of("error", "Invalid or expired refresh token"));
+        }
     }
 
     @PostMapping("/logout")
     public ResponseEntity<?> logout(HttpServletResponse response) {
-        Cookie jwt = new Cookie("jwt", null);
-        jwt.setHttpOnly(true);
-        jwt.setSecure(true);
-        jwt.setPath("/");
-        jwt.setMaxAge(0);
+        deleteCookie(response, "jwt");
+        deleteCookie(response, "refreshToken");
+        return ResponseEntity.ok(Map.of("message", "Logout successful"));
+    }
 
-        Cookie refresh = new Cookie("refreshToken", null);
-        refresh.setHttpOnly(true);
-        refresh.setSecure(true);
-        refresh.setPath("/");
-        refresh.setMaxAge(0);
+    // ---------- Cookie Helpers ----------
 
-        response.addCookie(jwt);
-        response.addCookie(refresh);
+    private void addCookie(HttpServletResponse response, String name, String value, int maxAge) {
+        Cookie cookie = new Cookie(name, value);
+        cookie.setHttpOnly(true);
+        cookie.setSecure(true);
+        cookie.setPath("/");
+        cookie.setMaxAge(maxAge);
+        cookie.setAttribute("SameSite", "None"); // Crucial for cross-site cookies (Vercel ↔ Render)
+        response.addCookie(cookie);
+    }
 
-        return ResponseEntity.ok("Logout successful");
+    private void deleteCookie(HttpServletResponse response, String name) {
+        Cookie cookie = new Cookie(name, null);
+        cookie.setHttpOnly(true);
+        cookie.setSecure(true);
+        cookie.setPath("/");
+        cookie.setMaxAge(0);
+        cookie.setAttribute("SameSite", "None");
+        response.addCookie(cookie);
     }
 }

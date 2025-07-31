@@ -6,8 +6,9 @@ import com.messUp.DTO.RegisterRequest;
 import com.messUp.JwtUtils.JwtService;
 import com.messUp.entity.User;
 import com.messUp.repository.UserRepository;
-import jakarta.servlet.http.Cookie;
 import lombok.Data;
+import org.springframework.security.authentication.BadCredentialsException;
+import org.springframework.security.core.userdetails.UsernameNotFoundException;
 import org.springframework.security.crypto.password.PasswordEncoder;
 import org.springframework.stereotype.Service;
 
@@ -27,7 +28,7 @@ public class AuthService {
 
     public AuthResponse register(RegisterRequest request) {
         if (userRepository.findByEmail(request.getEmail()).isPresent()) {
-            throw new RuntimeException("Email already registered");
+            throw new IllegalArgumentException("Email is already registered.");
         }
 
         User user = new User();
@@ -37,28 +38,29 @@ public class AuthService {
 
         userRepository.save(user);
 
-        String Token = jwtService.generateToken(user);
-        return new AuthResponse(Token, user.getUsername());
+        String token = jwtService.generateToken(user);
+        return new AuthResponse(token, user.getUsername());
     }
 
-    public AuthResponse login(LoginRequest request){
+    public AuthResponse login(LoginRequest request) {
         User user = userRepository.findByEmail(request.getEmail())
-                .orElseThrow(() -> new RuntimeException("Invalid email"));
+                .orElseThrow(() -> new UsernameNotFoundException("No user found with this email."));
 
         if (!passwordEncoder.matches(request.getPassword(), user.getPassword())) {
-            throw new RuntimeException("Invalid password");
+            throw new BadCredentialsException("Invalid email or password.");
         }
 
-        String Token = jwtService.generateToken(user);
+        String token = jwtService.generateToken(user);
         String refreshToken = jwtService.generateRefreshToken(user);
 
-        return new AuthResponse(Token, user.getUsername(),refreshToken);
+        return new AuthResponse(token, user.getUsername(), refreshToken);
     }
 
     public AuthResponse refreshToken(String refreshToken) {
         String username = jwtService.extractUsername(refreshToken);
+
         User user = userRepository.findByUsername(username)
-                .orElseThrow(() -> new RuntimeException("User not found"));
+                .orElseThrow(() -> new UsernameNotFoundException("User not found."));
 
         String newToken = jwtService.generateToken(user);
         String newRefreshToken = jwtService.generateRefreshToken(user);
