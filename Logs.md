@@ -59,4 +59,12 @@
 - Friend Relation Established in Frontend
 - WebSocket frontend Implementation(In Progress)
 
+## 08/06/2025 - 26/08/2025
+**Harsh**
+- Debugged existing Encryption and Implemented Hybrid Encryption.
+- Added a Passphrase feature.
+- Deployed backend on Render.
+- Bugs Debugged.
+
+
 
