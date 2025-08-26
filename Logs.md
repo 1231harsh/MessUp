@@ -65,6 +65,7 @@
 - Added a Passphrase feature.
 - Deployed backend on Render.
 - Bugs Debugged.
+- Website completed, works well for private messaging.
 
 
 
