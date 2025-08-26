@@ -1,28 +1,59 @@
 import axios from 'axios';
 
 // Configure axios with base URL
-const API_BASE_URL = 'http://localhost:8080';
+const API_BASE_URL = import.meta.env.VITE_BASE_URL;
 
 const api = axios.create({
   baseURL: API_BASE_URL,
   headers: {
-    'Content-Type': 'application/json',
+    "Content-Type": "application/json",
   },
   withCredentials: true, // Important for cookies
 });
 
-// Remove JWT token interceptors since we're using cookies
+let isRefreshing = false;
+let failedQueue = [];
+
+const processQueue = (error, token = null) => {
+  failedQueue.forEach((prom) => {
+    if (error) {
+      prom.reject(error);
+    } else {
+      prom.resolve(token);
+    }
+  });
+  failedQueue = [];
+};
+
 api.interceptors.response.use(
   (response) => response,
-  (error) => {
-    console.error('API Error:', error.response?.data || error.message);
+  async (error) => {
+    const originalRequest = error.config;
 
-    if (error.response?.status === 401) {
-      console.warn('Unauthorized request, redirecting to login');
-      
-      // Only redirect if not already on login page
-      if (window.location.pathname !== '/login') {
-        window.location.href = '/login';
+    if (error.response?.status === 401 && !originalRequest._retry) {
+      originalRequest._retry = true;
+
+      if (isRefreshing) {
+        return new Promise((resolve, reject) => {
+          failedQueue.push({ resolve, reject });
+        })
+          .then(() => api(originalRequest))
+          .catch((err) => Promise.reject(err));
+      }
+
+      isRefreshing = true;
+
+      try {
+        const refreshResponse = await api.post("/api/auth/refresh"); // Refresh token cookie is sent automatically
+        isRefreshing = false;
+        processQueue(null);
+        return api(originalRequest); // Retry the original request
+      } catch (refreshError) {
+        isRefreshing = false;
+        processQueue(refreshError, null);
+        console.error("❌ Refresh failed, redirect to login");
+        // Optionally: redirect to login page here
+        return Promise.reject(refreshError);
       }
     }
 
@@ -45,14 +76,28 @@ export const login = async (credentials) => {
 
 export const register = async (userData) => {
   try {
+    console.log('🔄 Attempting registration with data:', userData);
+
     const response = await api.post('/api/auth/register', {
       username: userData.fullName,
       email: userData.email,
       password: userData.password
     });
 
+    console.log('✅ Registration successful:', response.data);
     return response.data;
   } catch (error) {
+    console.error('❌ Registration failed:', error.response?.data || error.message);
+
+    // Handle specific error cases
+    if (error.response?.status === 409) {
+      throw new Error('User already exists with this email');
+    } else if (error.response?.status === 400) {
+      throw new Error(error.response?.data?.message || 'Invalid registration data');
+    } else if (error.code === 'ERR_NETWORK') {
+      throw new Error('Network error - please check if the server is running');
+    }
+
     throw new Error(error.response?.data?.message || 'Registration failed');
   }
 };
@@ -72,9 +117,23 @@ export const getCurrentUser = async () => {
     const response = await api.get('/api/users/current');
     return response.data;
   } catch (error) {
+    // Check if it's an OAuth2 redirect
+    if (error.message.includes('oauth2') || error.message.includes('Authentication required')) {
+      throw new Error('Authentication required - please login again');
+    }
     throw new Error(error.response?.data?.message || 'Failed to get current user');
   }
 };
+
+// Check OAuth2 authentication status
+// export const checkOAuth2Status = async () => {
+//   try {
+//     const response = await api.get('/api/auth/oauth2/status');
+//     return response.data;
+//   } catch (error) {
+//     throw new Error(error.response?.data?.message || 'Failed to check OAuth2 status');
+//   }
+// };
 
 // User search
 export const searchUser = async (searchTerm) => {
@@ -191,7 +250,7 @@ export const getAllFriends = async () => {
 // Create separate axios instances for different services
 const createFriendsApi = () => {
   const friendsApi = axios.create({
-    baseURL: 'http://localhost:8080',
+    baseURL: API_BASE_URL,
     headers: {
       'Content-Type': 'application/json',
     },
@@ -205,7 +264,7 @@ const createFriendsApi = () => {
       console.error('Friends API Error:', error);
 
       if (error.code === 'ECONNREFUSED' || error.code === 'ERR_NETWORK') {
-        throw new Error('Unable to connect to server. Please ensure the backend is running on http://localhost:8080');
+        throw new Error(`Unable to connect to server. Please ensure the backend is running on ${API_BASE_URL}`);
       }
 
       if (error.code === 'ECONNABORTED') {
@@ -221,7 +280,7 @@ const createFriendsApi = () => {
 
 const createNotificationsApi = () => {
   const notificationsApi = axios.create({
-    baseURL: 'http://localhost:8080/api',
+    baseURL: `${API_BASE_URL}/api`,
     headers: {
       'Content-Type': 'application/json',
     },
@@ -235,7 +294,7 @@ const createNotificationsApi = () => {
       console.error('Notifications API Error:', error);
 
       if (error.code === 'ECONNREFUSED' || error.code === 'ERR_NETWORK') {
-        throw new Error('Unable to connect to server. Please ensure the backend is running on http://localhost:8080');
+        throw new Error(`Unable to connect to server. Please ensure the backend is running on ${API_BASE_URL}`);
       }
 
       if (error.code === 'ECONNABORTED') {
@@ -414,5 +473,5 @@ export const markNotificationAsRead = async (notificationId) => {
     throw new Error(error.response?.data?.message || 'Failed to mark notification as read');
   }
 };
-
+``
 export default api;

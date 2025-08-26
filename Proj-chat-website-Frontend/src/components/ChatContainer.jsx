@@ -3,7 +3,6 @@ import ChatHeader from "./ChatHeader";
 import MessageInput from "./MessageInput";
 import { formatMessageTime, getDateLabel } from "../lib/utils";
 import { useChatStore } from "../store/useChatStore";
-import { getCurrentUserFromToken } from "../lib/jwtUtils";
 import { MessageSquare, Sparkles, Loader2, Check, CheckCheck, Shield, ShieldCheck, Lock } from "lucide-react";
 import encryptionService from "../lib/encryption";
 
@@ -20,13 +19,12 @@ const ChatContainer = ({ selectedUser, onClose }) => {
 
   const [messages, setMessages] = useState([]);
   const [hasEncryption, setHasEncryption] = useState(false);
-  const authUser = getCurrentUserFromToken();
 
   // Check if we have encryption set up with this user
   useEffect(() => {
     if (selectedUser) {
-      const hasKey = encryptionService.hasContactKey(selectedUser.username);
-      setHasEncryption(hasKey);
+      // For now, assume encryption is available if we have the service initialized
+      setHasEncryption(encryptionService.isInitialized);
     }
   }, [selectedUser]);
 
@@ -182,15 +180,15 @@ const ChatContainer = ({ selectedUser, onClose }) => {
                 <div className="w-20 h-20 rounded-2xl bg-gradient-to-br from-primary/20 to-primary/10 flex items-center justify-center animate-bounce shadow-lg border border-primary/20 backdrop-blur-sm">
                   <MessageSquare className="w-10 h-10 text-primary" />
                 </div>
-                <div className="absolute -top-1 -right-1 w-6 h-6 bg-green-500 rounded-full flex items-center justify-center">
+                <div className="absolute -top-1 -right-1 w-6 h-6 rounded-full flex items-center justify-center">
                   <Shield className="w-3 h-3 text-white" />
                 </div>
                 <Sparkles className="absolute -top-2 -right-2 w-6 h-6 text-primary/60 animate-pulse" />
-                <div className="absolute -bottom-2 left-1/2 transform -translate-x-1/2">
+                {/* <div className="absolute -bottom-2 left-1/2 transform -translate-x-1/2">
                   <div className="bg-primary/90 backdrop-blur-sm text-primary-content text-xs font-bold px-3 py-1 rounded-full shadow-lg border border-primary/30">
                     MessUp
                   </div>
-                </div>
+                </div> */}
               </div>
             </div>
 
@@ -231,7 +229,8 @@ const ChatContainer = ({ selectedUser, onClose }) => {
             const prevDate = prevMessage ? new Date(prevMessage.createdAt).toDateString() : null;
             const showDateLabel = currDate !== prevDate;
 
-            const isOwnMessage = message.senderId === authUser?.username;
+            // FIXED: Use currentUser.username to properly determine if message is from current user
+            const isOwnMessage = message.senderId === currentUser?.username;
             const isConsecutive = isConsecutiveMessage(message, prevMessage);
             const isLastInGroup = !nextMessage || !isConsecutiveMessage(nextMessage, message);
 
@@ -307,6 +306,13 @@ const ChatContainer = ({ selectedUser, onClose }) => {
                         </div>
                       )}
 
+                      {/* Decryption failed indicator */}
+                      {message.decryptionFailed && (
+                        <div className="absolute -top-1 -right-1 w-4 h-4 bg-red-500 rounded-full flex items-center justify-center">
+                          <span className="text-white text-xs">!</span>
+                        </div>
+                      )}
+
                       {/* Message content */}
                       <div className="flex flex-col">
                         {message.image && (
@@ -319,7 +325,9 @@ const ChatContainer = ({ selectedUser, onClose }) => {
 
                         {message.text && (
                           <div className="flex items-end gap-2">
-                            <p className="leading-relaxed flex-1">{message.text}</p>
+                            <p className={`leading-relaxed flex-1 ${message.decryptionFailed ? 'text-red-300 italic' : ''}`}>
+                              {message.text}
+                            </p>
 
                             {/* Time and status in bottom right */}
                             <div className="flex items-center gap-1 text-xs flex-shrink-0 ml-2 mt-1">
@@ -335,7 +343,7 @@ const ChatContainer = ({ selectedUser, onClose }) => {
                               )}
 
                               {/* Encryption indicator for own messages */}
-                              {isOwnMessage && hasEncryption && (
+                              {isOwnMessage && message.isEncrypted && (
                                 <Shield className="size-2 opacity-70" />
                               )}
                             </div>
@@ -348,7 +356,8 @@ const ChatContainer = ({ selectedUser, onClose }) => {
                     {messageStatus && isOwnMessage && (
                       <div className="text-xs text-base-content/50 mt-1 text-right flex items-center justify-end gap-1">
                         {messageStatus.text}
-                        {hasEncryption && <span className="text-green-600">• Encrypted</span>}
+                        {message.isEncrypted && <span className="text-green-600">• Encrypted</span>}
+                        {message.decryptionFailed && <span className="text-red-600">• Decryption failed</span>}
                       </div>
                     )}
                   </div>

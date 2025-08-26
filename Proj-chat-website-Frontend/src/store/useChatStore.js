@@ -3,6 +3,8 @@ import webSocketService from "../lib/websocket";
 import { getCurrentUser } from "../lib/api";
 import { getOldChatMessages } from "../lib/api";
 import encryptionService from "../lib/encryption";
+import { useAuthStore } from "./useAuthStore";
+
 
 const useChatStore = create((set, get) => ({
   // State
@@ -16,6 +18,13 @@ const useChatStore = create((set, get) => ({
 
   // Initialize WebSocket and encryption
   initializeWebSocket: async () => {
+
+    const { isAuthenticated } = useAuthStore.getState();
+    if (!isAuthenticated) {
+      console.warn("⚠️ Skipping WebSocket init — not authenticated");
+      return;
+    }
+
     try {
       // Get current user from backend
       const currentUser = await getCurrentUser();
@@ -26,18 +35,14 @@ const useChatStore = create((set, get) => ({
 
       set({ currentUser, isLoading: true });
 
-      // Initialize encryption service
-      console.log('🔐 Initializing encryption...');
-      await encryptionService.initialize();
+      // Initialize encryption service with username
+      console.log('🔐 Initializing encryption for user:', currentUser.username);
+      await encryptionService.initialize(currentUser.username);
 
       await webSocketService.connect(currentUser.username);
 
       webSocketService.addMessageHandler('chatStore', (messageData) => {
         get().handleIncomingMessage(messageData);
-      });
-
-      webSocketService.addReadReceiptHandler('chatStore', (readReceiptData) => {
-        get().handleReadReceipt(readReceiptData);
       });
 
       set({ isConnected: true, isLoading: false });
@@ -53,8 +58,8 @@ const useChatStore = create((set, get) => ({
   // Disconnect
   disconnectWebSocket: () => {
     webSocketService.removeMessageHandler('chatStore');
-    webSocketService.removeReadReceiptHandler('chatStore');
     webSocketService.disconnect();
+    encryptionService.clearKeys();
     set({ isConnected: false });
   },
 
@@ -78,9 +83,6 @@ const useChatStore = create((set, get) => ({
       const oldMessages = await getOldChatMessages(username);
 
       console.log('📥 Loaded old messages:', oldMessages.length);
-      if (oldMessages.length > 0) {
-        console.log('📥 Sample message structure:', oldMessages[0]);
-      }
 
       // Process messages and attempt decryption
       const processedMessages = await Promise.all(
@@ -94,8 +96,6 @@ const useChatStore = create((set, get) => ({
             };
           }
 
-          console.log(`🔍 Processing message ${index}:`, msg.text.substring(0, 100) + '...');
-
           if (encryptionService.isEncryptedMessage(msg.text)) {
             try {
               console.log(`🔓 Attempting to decrypt old message ${index}...`);
@@ -104,9 +104,8 @@ const useChatStore = create((set, get) => ({
               if (decryptedText &&
                   !decryptedText.startsWith('[') &&
                   !decryptedText.includes('could not be decrypted') &&
-                  !decryptedText.includes('wrong key') &&
-                  !decryptedText.includes('different key')) {
-                console.log(`✅ Old message ${index} decrypted successfully:`, decryptedText.substring(0, 50) + '...');
+                  !decryptedText.includes('key mismatch')) {
+                console.log(`✅ Old message ${index} decrypted successfully`);
                 return {
                   ...msg,
                   text: decryptedText,
@@ -114,7 +113,7 @@ const useChatStore = create((set, get) => ({
                   decryptionSuccessful: true
                 };
               } else {
-                console.warn(`⚠️ Decryption returned error for message ${index}:`, decryptedText);
+                console.warn(`⚠️ Decryption failed for message ${index}:`, decryptedText);
                 return {
                   ...msg,
                   text: decryptedText || '[Message could not be decrypted]',
@@ -133,7 +132,6 @@ const useChatStore = create((set, get) => ({
             }
           }
 
-          console.log(`📝 Message ${index} is not encrypted, keeping as plain text`);
           return {
             ...msg,
             isEncrypted: false
@@ -144,14 +142,6 @@ const useChatStore = create((set, get) => ({
       const sortedMessages = processedMessages.sort((a, b) =>
         new Date(a.createdAt) - new Date(b.createdAt)
       );
-
-      console.log(`📋 Processed ${sortedMessages.length} messages for ${username}`);
-
-      const encryptedCount = sortedMessages.filter(m => m.isEncrypted).length;
-      const successfulDecryptions = sortedMessages.filter(m => m.decryptionSuccessful).length;
-      const failedDecryptions = sortedMessages.filter(m => m.decryptionFailed).length;
-
-      console.log(`📊 Decryption stats: ${encryptedCount} encrypted, ${successfulDecryptions} decrypted, ${failedDecryptions} failed`);
 
       set((state) => ({
         messages: {
@@ -183,14 +173,12 @@ const useChatStore = create((set, get) => ({
   selectUser: async (user) => {
     set({ selectedUser: user });
 
-    console.log(`🔐 Setting up encryption for ${user.username}...`);
+    console.log(`🔐 Setting up chat with ${user.username}...`);
 
     const { messages } = get();
     if (!messages[user.username] || messages[user.username].length === 0) {
       await get().loadOldMessages(user.username);
     }
-
-    get().markConversationAsRead(user.username);
   },
 
   // Send message (will be encrypted automatically)
@@ -239,15 +227,6 @@ const useChatStore = create((set, get) => ({
         text
       );
 
-      setTimeout(() => {
-        set((state) => ({
-          messageStatuses: {
-            ...state.messageStatuses,
-            [messageId]: 'DELIVERED'
-          }
-        }));
-      }, 1000);
-
       return true;
     } catch (error) {
       console.error('❌ Send failed:', error);
@@ -276,12 +255,11 @@ const useChatStore = create((set, get) => ({
         if (decryptedText &&
             !decryptedText.startsWith('[') &&
             !decryptedText.includes('could not be decrypted') &&
-            !decryptedText.includes('wrong key') &&
-            !decryptedText.includes('different key')) {
+            !decryptedText.includes('key mismatch')) {
           isEncrypted = true;
           console.log('✅ Incoming message decrypted successfully');
         } else {
-          console.error('❌ Decryption returned error:', decryptedText);
+          console.error('❌ Decryption failed:', decryptedText);
           isEncrypted = true;
           decryptionFailed = true;
         }
@@ -307,9 +285,15 @@ const useChatStore = create((set, get) => ({
     set((state) => {
       const existing = state.messages[otherUser] || [];
 
-      const filtered = existing.filter(msg =>
-        !(msg.isTemp && msg.text === formattedMessage.text && msg.senderId === formattedMessage.senderId)
-      );
+      const filtered = existing.filter((msg) => {
+        const isDuplicate =
+          msg.senderId === formattedMessage.senderId &&
+          msg.text === formattedMessage.text &&
+          Math.abs(
+            new Date(msg.createdAt) - new Date(formattedMessage.createdAt)
+          ) < 2000;
+        return !isDuplicate;
+      });
 
       return {
         messages: {
@@ -321,82 +305,6 @@ const useChatStore = create((set, get) => ({
           [formattedMessage._id]: 'DELIVERED'
         }
       };
-    });
-
-    const { selectedUser } = get();
-    if (messageData.sender !== currentUser.username && selectedUser?.username === messageData.sender) {
-      setTimeout(() => {
-        get().markMessageAsRead(formattedMessage._id);
-      }, 500);
-    }
-  },
-
-  // Handle read receipts
-  handleReadReceipt: (readReceiptData) => {
-    console.log('📨 Processing read receipt:', readReceiptData);
-
-    set((state) => ({
-      messageStatuses: {
-        ...state.messageStatuses,
-        [readReceiptData.messageId]: 'READ'
-      }
-    }));
-
-    const { messages } = get();
-    Object.keys(messages).forEach(username => {
-      const userMessages = messages[username];
-      const messageIndex = userMessages.findIndex(msg => msg._id === readReceiptData.messageId);
-
-      if (messageIndex !== -1) {
-        set((state) => ({
-          messages: {
-            ...state.messages,
-            [username]: state.messages[username].map(msg =>
-              msg._id === readReceiptData.messageId
-                ? { ...msg, status: 'read' }
-                : msg
-            )
-          }
-        }));
-      }
-    });
-  },
-
-  // Mark a specific message as read
-  markMessageAsRead: (messageId) => {
-    if (!webSocketService.isConnected()) {
-      console.error('❌ Cannot mark as read: not connected');
-      return;
-    }
-
-    try {
-      webSocketService.markAsRead(messageId);
-
-      set((state) => ({
-        messageStatuses: {
-          ...state.messageStatuses,
-          [messageId]: 'READ'
-        }
-      }));
-    } catch (error) {
-      console.error('❌ Failed to mark message as read:', error);
-    }
-  },
-
-  // Mark entire conversation as read
-  markConversationAsRead: (username) => {
-    const { messages, currentUser } = get();
-    const userMessages = messages[username] || [];
-
-    const unreadMessages = userMessages.filter(msg =>
-      msg.senderId !== currentUser?.username &&
-      (!msg.status || msg.status !== 'read')
-    );
-
-    unreadMessages.forEach(msg => {
-      if (msg._id && !msg.isTemp) {
-        get().markMessageAsRead(msg._id);
-      }
     });
   },
 

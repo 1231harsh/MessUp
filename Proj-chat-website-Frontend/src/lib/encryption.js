@@ -1,22 +1,37 @@
 import { stringify } from "postcss";
+import { usePassphraseStore } from "../store/usePassphraseStore";
+const API_BASE_URL = import.meta.env.VITE_BASE_URL;
 
 // End-to-End Encryption utilities using Web Crypto API
 class EncryptionService {
-  constructor(currentUsername) {
-    this.currentUsername=currentUsername;
+  constructor() {
+    this.currentUsername = null;
+    this.userPassword = null;
     this.keyPair = null;
     this.publicKey = null;
     this.privateKey = null;
     this.contactKeys = new Map();
     this.isInitialized = false;
-    this.keyStorageKey = 'messup_encryption_keys';
-    this.initPromise = null; // Prevent multiple initializations
+    this.keyStorageKey = "messup_encryption_keys";
+    this.initPromise = null;
+    this.keyUploadPending = false;
+    this.uploadInProgress = false;
+  }
+
+  // Set current username
+  setCurrentUsername(username) {
+    this.currentUsername = username;
+    this.keyStorageKey = `messup_encryption_keys_${username}`;
+  }
+
+  setPassphraseHandler(handler) {
+    this.passphraseHandler = handler;
   }
 
   // Generate RSA key pair ONLY once per user
-  async generateKeyPair() {
+  async generateKeyPair(password) {
     try {
-      console.log('🔐 Generating new RSA key pair...');
+      console.log("🔐 Generating new RSA key pair...");
 
       this.keyPair = await window.crypto.subtle.generateKey(
         {
@@ -25,21 +40,112 @@ class EncryptionService {
           publicExponent: new Uint8Array([1, 0, 1]),
           hash: "SHA-256",
         },
-        true, // extractable
+        true,
         ["encrypt", "decrypt"]
       );
 
       this.publicKey = this.keyPair.publicKey;
       this.privateKey = this.keyPair.privateKey;
 
-      // Store keys immediately
       await this.storeKeys();
+      await this.backupEncryptedPrivateKey(password);
 
-      console.log('🔐 New key pair generated and stored successfully');
+      this.keyUploadPending = true;
+      this.isInitialized = true;
+
+      console.log("🔐 New key pair generated and backed up");
       return this.keyPair;
     } catch (error) {
-      console.error('❌ Failed to generate key pair:', error);
+      console.error("❌ Failed to generate key pair:", error);
       throw error;
+    }
+  }
+
+  // Upload public key to server (only when authenticated)
+  async uploadPublicKeyToServer() {
+    if (this.uploadInProgress) return;
+    this.uploadInProgress = true;
+
+    try {
+      const isLoggedIn = await this.isUserAuthenticated();
+      if (!isLoggedIn) {
+        console.warn("🔐 User not authenticated yet. Will retry later.");
+        this.keyUploadPending = true;
+        return;
+      }
+      if (!this.currentUsername || !this.publicKey) {
+        console.error("❌ Cannot upload key: missing username or public key");
+        return;
+      }
+
+      const publicKeyJwk = await window.crypto.subtle.exportKey(
+        "jwk",
+        this.publicKey
+      );
+      console.log(
+        "🔐 Uploading public key to server for user:",
+        this.currentUsername
+      );
+
+      // FIXED: Use the same API configuration as other requests
+      const response = await fetch(`${API_BASE_URL}/api/keys/upload`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+        },
+        credentials: "include", // This ensures cookies are sent
+        body: JSON.stringify({
+          username: this.currentUsername,
+          publicKeyJwk: publicKeyJwk,
+        }),
+      });
+
+      if (!response.ok) {
+        const errorText = await response.text();
+
+        // Check if response is HTML (OAuth2 redirect)
+        if (
+          errorText.includes("<!DOCTYPE html>") ||
+          errorText.includes("<html>")
+        ) {
+          console.log(
+            "🔐 Received HTML response (OAuth2 redirect), marking for retry after authentication"
+          );
+          this.keyUploadPending = true;
+          return;
+        }
+
+        // If it's an authentication error, mark for retry later
+        if (response.status === 401 || response.status === 403) {
+          console.log(
+            "🔐 Authentication required for key upload, will retry after login"
+          );
+          this.keyUploadPending = true;
+          return;
+        }
+
+        throw new Error(
+          `Failed to upload public key: ${response.status} - ${errorText}`
+        );
+      }
+
+      const result = await response.text();
+      console.log("✅ Public key uploaded to server successfully:", result);
+      this.keyUploadPending = false;
+    } catch (error) {
+      console.error("❌ Failed to upload public key to server:", error);
+
+      // If it's a network, auth, or CORS error, mark for retry
+      if (
+        error.message.includes("401") ||
+        error.message.includes("403") ||
+        error.message.includes("fetch") ||
+        error.message.includes("CORS") ||
+        error.message.includes("Failed to fetch")
+      ) {
+        console.log("🔐 Network/Auth error, will retry key upload later");
+        this.keyUploadPending = true;
+      }
     }
   }
 
@@ -47,73 +153,154 @@ class EncryptionService {
   async storeKeys() {
     try {
       if (!this.publicKey || !this.privateKey) {
-        throw new Error('No keys to store');
+        throw new Error("No keys to store");
       }
 
-      const publicKeyJwk = await window.crypto.subtle.exportKey("jwk", this.publicKey);
-      const privateKeyJwk = await window.crypto.subtle.exportKey("jwk", this.privateKey);
+      const publicKeyJwk = await window.crypto.subtle.exportKey(
+        "jwk",
+        this.publicKey
+      );
+      const privateKeyJwk = await window.crypto.subtle.exportKey(
+        "jwk",
+        this.privateKey
+      );
 
       const keyData = {
         publicKey: publicKeyJwk,
         privateKey: privateKeyJwk,
         timestamp: Date.now(),
-        version: '1.0' // Add version for future compatibility
+        version: "1.0",
+        username: this.currentUsername,
       };
 
       localStorage.setItem(this.keyStorageKey, JSON.stringify(keyData));
-      console.log('🔐 Keys stored successfully with timestamp:', keyData.timestamp);
+      console.log(
+        "🔐 Keys stored successfully with timestamp:",
+        keyData.timestamp
+      );
     } catch (error) {
-      console.error('❌ Failed to store keys:', error);
+      console.error("❌ Failed to store keys:", error);
       throw error;
     }
   }
 
-  // Load keys with better consistency - FIXED
+  // Initialize encryption service
+  async initialize(username) {
+    try {
+      if (this.isInitialized && this.currentUsername === username) {
+        console.log("🔐 Encryption already initialized for user:", username);
+        await this.tryUploadPendingKey();
+        return true;
+      }
+
+      this.setCurrentUsername(username);
+
+      await this.ensureInitialized(); // Will use userPassword internally
+      await this.tryUploadPendingKey();
+
+      console.log("🔐 Encryption service initialized successfully");
+      return true;
+    } catch (error) {
+      console.error("❌ Failed to initialize encryption service:", error);
+      throw error;
+    }
+  }
+
+  // Load keys with better consistency
   async loadKeys() {
     try {
-      console.log('🔐 Loading encryption keys...');
+      console.log("🔐 Loading encryption keys for user:", this.currentUsername);
 
       const storedData = localStorage.getItem(this.keyStorageKey);
 
-      if (!storedData) {
-        console.log('🔐 No stored keys found, generating new ones...');
-        return await this.generateKeyPair();
+      if (storedData) {
+        const keyData = JSON.parse(storedData);
+        console.log("🔐 Found stored keys from timestamp:", keyData.timestamp);
+
+        this.publicKey = await window.crypto.subtle.importKey(
+          "jwk",
+          keyData.publicKey,
+          { name: "RSA-OAEP", hash: "SHA-256" },
+          true,
+          ["encrypt"]
+        );
+
+        this.privateKey = await window.crypto.subtle.importKey(
+          "jwk",
+          keyData.privateKey,
+          { name: "RSA-OAEP", hash: "SHA-256" },
+          true,
+          ["decrypt"]
+        );
+
+        this.keyUploadPending = true;
+        this.isInitialized = true;
+        return;
       }
 
-      const keyData = JSON.parse(storedData);
-      console.log('🔐 Found stored keys from timestamp:', keyData.timestamp);
+      console.log("🔐 No local key found, checking server backup...");
 
-      // Import the stored keys
-      this.publicKey = await window.crypto.subtle.importKey(
-        "jwk",
-        keyData.publicKey,
-        {
-          name: "RSA-OAEP",
-          hash: "SHA-256",
-        },
-        true,
-        ["encrypt"]
-      );
+      while (true) {
+        const passphrase = await this.getPassphraseFromUser();
+        if (!passphrase) {
+          console.warn("🔐 User cancelled passphrase prompt — logging out");
+          throw new Error("Passphrase prompt cancelled by user");
+        }
 
-      this.privateKey = await window.crypto.subtle.importKey(
-        "jwk",
-        keyData.privateKey,
-        {
-          name: "RSA-OAEP",
-          hash: "SHA-256",
-        },
-        true,
-        ["decrypt"]
-      );
+        try {
+          const restored = await this.tryRestorePrivateKeyFromServer(
+            passphrase
+          );
+          if (restored) {
+            this.isInitialized = true;
+            return;
+          }
+        } catch (err) {
+          if (err.message.includes("Incorrect passphrase")) {
+            alert("❌ Incorrect passphrase, please try again.");
+            continue; // prompt again
+          }
 
-      console.log('🔐 Keys loaded and imported successfully');
-      this.isInitialized = true;
-      return { publicKey: this.publicKey, privateKey: this.privateKey };
-    } catch (error) {
-      console.error('❌ Failed to load keys, generating new ones:', error);
-      // Clear corrupted keys and generate new ones
-      localStorage.removeItem(this.keyStorageKey);
-      return await this.generateKeyPair();
+          if (err.message.includes("No server backup")) {
+            const confirmed = confirm(
+              "🆕 No key found on server. This seems to be your first login. Generate a new encryption key?"
+            );
+            if (confirmed) {
+              await this.generateKeyPair(passphrase);
+              this.isInitialized = true;
+              return;
+            } else {
+              throw new Error("User declined key generation");
+            }
+          }
+
+          console.error("🔐 Key restoration failed:", err);
+          throw err;
+        }
+      }
+    } catch (err) {
+      console.error("🔐 Key initialization aborted:", err.message);
+      throw err;
+    }
+  }
+
+  async getPassphraseFromUser() {
+    if (typeof this.passphraseHandler !== "function") {
+      throw new Error("No passphrase handler set");
+    }
+
+    return await this.passphraseHandler(); // await the user's input via modal
+  }
+
+  // Try to upload pending key (call this after successful authentication)
+  async tryUploadPendingKey() {
+    if (this.keyUploadPending && this.publicKey && this.currentUsername) {
+      // Add a small delay to ensure authentication is fully established
+      setTimeout(() => {
+        this.uploadPublicKeyToServer().catch((err) => {
+          console.warn("🔁 Delayed key upload failed:", err);
+        });
+      }, 1000);
     }
   }
 
@@ -137,24 +324,28 @@ class EncryptionService {
 
   // Check if message is encrypted JSON
   isEncryptedMessage(message) {
-    if (!message || typeof message !== 'string') {
+    if (!message || typeof message !== "string") {
       return false;
     }
 
-    if (!message.trim().startsWith('{')) {
+    if (!message.trim().startsWith("{")) {
       return false;
     }
 
     try {
       const parsed = JSON.parse(message);
-      return parsed &&
-             typeof parsed === 'object' &&
-             typeof parsed.encryptedMessage === 'string' &&
-             typeof parsed.encryptedKey === 'string' &&
-             typeof parsed.iv === 'string' &&
-             parsed.encryptedMessage.length > 0 &&
-             parsed.encryptedKey.length > 0 &&
-             parsed.iv.length > 0;
+      return (
+        parsed &&
+        typeof parsed === "object" &&
+        typeof parsed.encryptedMessage === "string" &&
+        typeof parsed.encryptedKeyForRecipient === "string" &&
+        typeof parsed.encryptedKeyForSender === "string" &&
+        typeof parsed.iv === "string" &&
+        parsed.encryptedMessage.length > 0 &&
+        parsed.encryptedKeyForRecipient.length > 0 &&
+        parsed.encryptedKeyForSender.length > 0 &&
+        parsed.iv.length > 0
+      );
     } catch (error) {
       return false;
     }
@@ -172,12 +363,31 @@ class EncryptionService {
       return;
     }
 
-    this.initPromise = this.loadKeys();
-    await this.initPromise;
-    this.initPromise = null;
+    const promiseRef = this.loadKeys();
+    this.initPromise = promiseRef;
+
+    try {
+      await promiseRef;
+    } finally {
+      // Only clear if it's the current tracked promise
+      if (this.initPromise === promiseRef) {
+        this.initPromise = null;
+      }
+    }
   }
 
-  // FIXED: Get contact's public key properly
+  getSafeContactKeyStore() {
+    try {
+      const raw = localStorage.getItem("contactPublicKeys");
+      return raw ? JSON.parse(raw) : {};
+    } catch (err) {
+      console.warn("⚠️ Corrupted contactPublicKeys, clearing it.");
+      localStorage.removeItem("contactPublicKeys");
+      return {};
+    }
+  }
+
+  // Get contact's public key from server
   async getContactPublicKey(username) {
     try {
       console.log(`🔐 Getting public key for contact: ${username}`);
@@ -200,16 +410,44 @@ class EncryptionService {
         );
       }
 
-      const res = await fetch(`http://localhost:8080/api/keys/get/${username}`);
-      if(!res.ok) throw new Error("Key not found");
+      // Check localStorage cache
+      const stored = this.getSafeContactKeyStore();
+      if (stored[username]) {
+        console.log(`🔐 Found ${username}'s key in localStorage cache`);
+        this.contactKeys.set(username, stored[username]);
+
+        return await window.crypto.subtle.importKey(
+          "jwk",
+          stored[username],
+          {
+            name: "RSA-OAEP",
+            hash: "SHA-256",
+          },
+          false,
+          ["encrypt"]
+        );
+      }
+
+      // Fetch from server
+      console.log(`🔐 Fetching ${username}'s key from server...`);
+      const res = await fetch(
+        `${API_BASE_URL}/api/keys/get/${username}`,
+        {
+          credentials: "include",
+        }
+      );
+
+      if (!res.ok) {
+        throw new Error(`Key not found for user: ${username} (${res.status})`);
+      }
 
       const publicKeyJwk = await res.json();
-      this.contactKeys.set(username,publicKeyJwk);
+      console.log(`🔐 Successfully fetched ${username}'s key from server`);
 
-      // Check localStorage
-      const stored = JSON.parse(localStorage.getItem('contactPublicKeys') || '{}');
+      // Cache the key
+      this.contactKeys.set(username, publicKeyJwk);
       stored[username] = publicKeyJwk;
-      localStorage.setItem('contactPublicKeys',JSON.stringify(stored));
+      localStorage.setItem("contactPublicKeys", JSON.stringify(stored));
 
       return await window.crypto.subtle.importKey(
         "jwk",
@@ -221,249 +459,321 @@ class EncryptionService {
         false,
         ["encrypt"]
       );
-
     } catch (error) {
-      console.error(`❌ Failed to get contact public key for ${username}:`, error);
-
-      // Fallback to our own key for demo
-      await this.ensureInitialized();
-      return this.publicKey;
+      console.error(
+        `❌ Failed to get contact public key for ${username}:`,
+        error
+      );
+      throw error;
     }
   }
 
-  // FIXED: Encrypt message using recipient's public key
+  async isUserAuthenticated() {
+    try {
+      const res = await fetch(`${API_BASE_URL}/api/users/current`, {
+        credentials: "include",
+      });
+
+      return res.ok;
+    } catch (e) {
+      return false;
+    }
+  }
+
+  // Encrypt message using recipient's public key
   async encryptMessage(message, recipientUsername) {
     try {
       await this.ensureInitialized();
 
       console.log(`🔐 Encrypting message for ${recipientUsername}...`);
 
-      // Get the recipient's public key (FIXED: was using our own key)
-      const recipientPublicKey = await this.getContactPublicKey(recipientUsername);
-
+      const recipientPublicKey = await this.getContactPublicKey(
+        recipientUsername
+      );
       if (!recipientPublicKey) {
         console.error(`❌ No public key available for ${recipientUsername}`);
         return null;
       }
 
-      // Generate AES key for this message
       const aesKey = await this.generateAESKey();
-
-      // Encrypt the message with AES
       const encoder = new TextEncoder();
-      const messageData = encoder.encode(message);
       const iv = window.crypto.getRandomValues(new Uint8Array(12));
+      const messageData = encoder.encode(message);
 
       const encryptedMessage = await window.crypto.subtle.encrypt(
-        {
-          name: "AES-GCM",
-          iv: iv,
-        },
+        { name: "AES-GCM", iv },
         aesKey,
         messageData
       );
 
-      // Export AES key and encrypt it with recipient's RSA public key (FIXED)
       const aesKeyRaw = await window.crypto.subtle.exportKey("raw", aesKey);
 
-      const encryptedAESKey = await window.crypto.subtle.encrypt(
-        {
-          name: "RSA-OAEP",
-        },
-        recipientPublicKey, // FIXED: Use recipient's public key instead of our own
+      const encryptedKeyForRecipient = await window.crypto.subtle.encrypt(
+        { name: "RSA-OAEP" },
+        recipientPublicKey,
         aesKeyRaw
       );
 
-      // Return encrypted data as base64 strings
-      const encryptedData = {
-        encryptedMessage: this.arrayBufferToBase64(encryptedMessage),
-        encryptedKey: this.arrayBufferToBase64(encryptedAESKey),
-        iv: this.arrayBufferToBase64(iv),
-        timestamp: Date.now(),
-        encryptedFor: recipientUsername, // FIXED: Track who this was encrypted for
-        keyFingerprint: await this.getKeyFingerprint() // Add key fingerprint for debugging
-      };
+      const encryptedKeyForSender = await window.crypto.subtle.encrypt(
+        { name: "RSA-OAEP" },
+        this.publicKey,
+        aesKeyRaw
+      );
 
-      const encryptedString = JSON.stringify(encryptedData);
-      console.log(`🔐 Message encrypted successfully for ${recipientUsername} with key fingerprint:`, encryptedData.keyFingerprint);
-      return encryptedString;
+      return JSON.stringify({
+        encryptedMessage: this.arrayBufferToBase64(encryptedMessage),
+        encryptedKeyForRecipient: this.arrayBufferToBase64(
+          encryptedKeyForRecipient
+        ),
+        encryptedKeyForSender: this.arrayBufferToBase64(encryptedKeyForSender),
+        iv: this.arrayBufferToBase64(iv),
+        encryptedFor: recipientUsername,
+        encryptedBy: this.currentUsername,
+        timestamp: Date.now(),
+      });
     } catch (error) {
-      console.error('❌ Failed to encrypt message:', error);
+      console.error("❌ Failed to encrypt message:", error);
       return null;
     }
   }
 
-  // Get a fingerprint of the current key for debugging
-  async getKeyFingerprint() {
-    try {
-      const publicKeyJwk = await window.crypto.subtle.exportKey("jwk", this.publicKey);
-      const keyString = JSON.stringify(publicKeyJwk);
-      const encoder = new TextEncoder();
-      const data = encoder.encode(keyString);
-      const hashBuffer = await window.crypto.subtle.digest('SHA-256', data);
-      const hashArray = new Uint8Array(hashBuffer);
-      return Array.from(hashArray).map(b => b.toString(16).padStart(2, '0')).join('').substring(0, 16);
-    } catch (error) {
-      return 'unknown';
-    }
-  }
-
-  // Decrypt message - COMPLETELY REWRITTEN with better error handling
+  // Decrypt message
   async decryptMessage(encryptedMessageString) {
     try {
       await this.ensureInitialized();
-
-      // Validate input
-      if (!encryptedMessageString || typeof encryptedMessageString !== 'string') {
-        console.error('❌ Invalid encrypted message format');
-        return '[Invalid encrypted message format]';
+      if (
+        !encryptedMessageString ||
+        typeof encryptedMessageString !== "string"
+      ) {
+        return "[Invalid encrypted message format]";
       }
 
-      console.log('🔓 Attempting to decrypt message...');
+      const data = JSON.parse(encryptedMessageString);
+      const iv = this.base64ToArrayBuffer(data.iv);
+      const encryptedMsg = this.base64ToArrayBuffer(data.encryptedMessage);
 
-      // Parse encrypted data
-      let encryptedData;
-      try {
-        encryptedData = JSON.parse(encryptedMessageString);
-      } catch (parseError) {
-        console.error('❌ Failed to parse encrypted message JSON:', parseError);
-        return '[Invalid encrypted message format]';
-      }
+      let encryptedKeyBase64 =
+        data.encryptedFor === this.currentUsername
+          ? data.encryptedKeyForRecipient
+          : data.encryptedKeyForSender;
 
-      // Validate encrypted data structure
-      if (!encryptedData ||
-          typeof encryptedData.encryptedMessage !== 'string' ||
-          typeof encryptedData.encryptedKey !== 'string' ||
-          typeof encryptedData.iv !== 'string') {
-        console.error('❌ Missing required encryption fields');
-        return '[Missing required encryption fields]';
-      }
+      const encryptedAESKey = this.base64ToArrayBuffer(encryptedKeyBase64);
 
-      // Log key fingerprints for debugging
-      const currentKeyFingerprint = await this.getKeyFingerprint();
-      console.log('🔓 Current key fingerprint:', currentKeyFingerprint);
-      console.log('🔓 Message encrypted for:', encryptedData.encryptedFor || 'unknown');
-      console.log('🔓 Message encrypted with fingerprint:', encryptedData.keyFingerprint || 'unknown');
+      const aesKeyRaw = await window.crypto.subtle.decrypt(
+        { name: "RSA-OAEP" },
+        this.privateKey,
+        encryptedAESKey
+      );
 
-      try {
-        // Decrypt AES key with our RSA private key
-        const encryptedAESKey = this.base64ToArrayBuffer(encryptedData.encryptedKey);
+      const aesKey = await window.crypto.subtle.importKey(
+        "raw",
+        aesKeyRaw,
+        { name: "AES-GCM" },
+        false,
+        ["decrypt"]
+      );
 
-        console.log('🔓 Decrypting AES key with private key...');
-        const aesKeyRaw = await window.crypto.subtle.decrypt(
-          {
-            name: "RSA-OAEP",
-          },
-          this.privateKey,
-          encryptedAESKey
-        );
+      const decrypted = await window.crypto.subtle.decrypt(
+        { name: "AES-GCM", iv },
+        aesKey,
+        encryptedMsg
+      );
 
-        // Import the decrypted AES key
-        console.log('🔓 Importing decrypted AES key...');
-        const aesKey = await window.crypto.subtle.importKey(
-          "raw",
-          aesKeyRaw,
-          {
-            name: "AES-GCM",
-          },
-          false,
-          ["decrypt"]
-        );
-
-        // Decrypt the message with AES
-        console.log('🔓 Decrypting message content...');
-        const encryptedMessage = this.base64ToArrayBuffer(encryptedData.encryptedMessage);
-        const iv = this.base64ToArrayBuffer(encryptedData.iv);
-
-        const decryptedMessage = await window.crypto.subtle.decrypt(
-          {
-            name: "AES-GCM",
-            iv: iv,
-          },
-          aesKey,
-          encryptedMessage
-        );
-
-        // Convert back to string
-        const decoder = new TextDecoder();
-        const decryptedText = decoder.decode(decryptedMessage);
-
-        console.log('🔓 Message decrypted successfully:', decryptedText.substring(0, 50) + '...');
-        return decryptedText;
-
-      } catch (cryptoError) {
-        console.error('❌ Crypto operation failed:', cryptoError);
-        console.error('❌ Error name:', cryptoError.name);
-        console.error('❌ Error message:', cryptoError.message);
-
-        // More specific error handling
-        if (cryptoError.name === 'OperationError') {
-          return '[Decryption failed - key mismatch]';
-        } else if (cryptoError.name === 'InvalidAccessError') {
-          return '[Invalid key for decryption]';
-        } else {
-          return '[Crypto operation failed]';
-        }
-      }
-
-    } catch (error) {
-      console.error('❌ Failed to decrypt message:', error);
-      return '[Message could not be decrypted]';
+      return new TextDecoder().decode(decrypted);
+    } catch (err) {
+      console.error("❌ Failed to decrypt:", err);
+      return "[Decryption failed]";
     }
   }
 
-  // Utility functions for base64 conversion
-  arrayBufferToBase64(buffer) {
+  async encryptPrivateKeyWithPassphrase(privateKeyJwk, passphrase) {
+    const encoder = new TextEncoder();
+    const salt = window.crypto.getRandomValues(new Uint8Array(16));
+    const iv = window.crypto.getRandomValues(new Uint8Array(12));
+
+    const keyMaterial = await window.crypto.subtle.importKey(
+      "raw",
+      encoder.encode(passphrase),
+      { name: "PBKDF2" },
+      false,
+      ["deriveKey"]
+    );
+
+    const derivedKey = await window.crypto.subtle.deriveKey(
+      {
+        name: "PBKDF2",
+        salt: salt,
+        iterations: 100000,
+        hash: "SHA-256",
+      },
+      keyMaterial,
+      { name: "AES-GCM", length: 256 },
+      false,
+      ["encrypt"]
+    );
+
+    const privateKeyStr = JSON.stringify(privateKeyJwk);
+    const encrypted = await window.crypto.subtle.encrypt(
+      { name: "AES-GCM", iv },
+      derivedKey,
+      encoder.encode(privateKeyStr)
+    );
+
+    return {
+      encryptedPrivateKey: this.arrayBufferToBase64(encrypted),
+      salt: this.arrayBufferToBase64(salt),
+      iv: this.arrayBufferToBase64(iv),
+    };
+  }
+
+  async decryptPrivateKeyWithPassphrase(encryptedData, salt, iv, passphrase) {
     try {
-      const bytes = new Uint8Array(buffer);
-      let binary = '';
-      for (let i = 0; i < bytes.byteLength; i++) {
-        binary += String.fromCharCode(bytes[i]);
-      }
-      return window.btoa(binary);
-    } catch (error) {
-      console.error('❌ Failed to convert ArrayBuffer to base64:', error);
-      throw error;
+      const encryptedArrayBuffer = this.base64ToArrayBuffer(encryptedData);
+      const saltBuffer = this.base64ToArrayBuffer(salt);
+      const ivBuffer = this.base64ToArrayBuffer(iv);
+
+      const encoder = new TextEncoder();
+      const keyMaterial = await window.crypto.subtle.importKey(
+        "raw",
+        encoder.encode(passphrase),
+        { name: "PBKDF2" },
+        false,
+        ["deriveKey"]
+      );
+
+      const derivedKey = await window.crypto.subtle.deriveKey(
+        {
+          name: "PBKDF2",
+          salt: saltBuffer,
+          iterations: 100000,
+          hash: "SHA-256",
+        },
+        keyMaterial,
+        { name: "AES-GCM", length: 256 },
+        false,
+        ["decrypt"]
+      );
+
+      const decrypted = await window.crypto.subtle.decrypt(
+        { name: "AES-GCM", iv: ivBuffer },
+        derivedKey,
+        encryptedArrayBuffer
+      );
+
+      const decoded = new TextDecoder().decode(decrypted);
+      return JSON.parse(decoded);
+    } catch (err) {
+      console.error("🔐 Failed to decrypt private key:", err);
+      throw new Error("Incorrect passphrase or corrupted key data.");
     }
+  }
+
+  async backupEncryptedPrivateKey(password) {
+    const privateKeyJwk = await window.crypto.subtle.exportKey(
+      "jwk",
+      this.privateKey
+    );
+    const encrypted = await this.encryptPrivateKeyWithPassphrase(
+      privateKeyJwk,
+      password
+    );
+
+    await fetch(`${API_BASE_URL}/api/keys/upload-private`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      credentials: "include",
+      body: JSON.stringify({
+        username: this.currentUsername,
+        ...encrypted,
+      }),
+    });
+
+    console.log("✅ Encrypted private key uploaded successfully.");
+  }
+
+  async tryRestorePrivateKeyFromServer(password) {
+    const res = await fetch(
+      `${API_BASE_URL}/api/keys/get-private/${this.currentUsername}`,
+      { credentials: "include" }
+    );
+
+    if (!res.ok) throw new Error("No server backup available");
+
+    const encrypted = await res.json();
+    const privateKeyJwk = await this.decryptPrivateKeyWithPassphrase(
+      encrypted.encryptedPrivateKey,
+      encrypted.salt,
+      encrypted.iv,
+      password
+    );
+
+    this.privateKey = await window.crypto.subtle.importKey(
+      "jwk",
+      privateKeyJwk,
+      { name: "RSA-OAEP", hash: "SHA-256" },
+      true,
+      ["decrypt"]
+    );
+
+    if (!privateKeyJwk.n || !privateKeyJwk.e) {
+      throw new Error("Missing public key params in private key JWK.");
+    }
+
+    const publicKeyJwk = {
+      kty: "RSA",
+      e: privateKeyJwk.e,
+      n: privateKeyJwk.n,
+      alg: "RSA-OAEP-256",
+      ext: true,
+    };
+
+    this.publicKey = await window.crypto.subtle.importKey(
+      "jwk",
+      publicKeyJwk,
+      { name: "RSA-OAEP", hash: "SHA-256" },
+      true,
+      ["encrypt"]
+    );
+
+    localStorage.setItem(
+      this.keyStorageKey,
+      JSON.stringify({
+        publicKey: publicKeyJwk,
+        privateKey: privateKeyJwk,
+        timestamp: Date.now(),
+        version: "1.0",
+        username: this.currentUsername,
+      })
+    );
+
+    console.log("✅ Restored private key and regenerated public key");
+    return true;
+  }
+
+  arrayBufferToBase64(buffer) {
+    const bytes = new Uint8Array(buffer);
+    let binary = "";
+    for (let i = 0; i < bytes.byteLength; i++) {
+      binary += String.fromCharCode(bytes[i]);
+    }
+    return window.btoa(binary);
   }
 
   base64ToArrayBuffer(base64) {
-    try {
-      const binary = window.atob(base64);
-      const bytes = new Uint8Array(binary.length);
-      for (let i = 0; i < binary.length; i++) {
-        bytes[i] = binary.charCodeAt(i);
-      }
-      return bytes.buffer;
-    } catch (error) {
-      console.error('❌ Failed to convert base64 to ArrayBuffer:', error);
-      throw error;
+    const binary = window.atob(base64);
+    const bytes = new Uint8Array(binary.length);
+    for (let i = 0; i < binary.length; i++) {
+      bytes[i] = binary.charCodeAt(i);
     }
+    return bytes.buffer;
   }
 
-  // Initialize encryption service - ENSURE SINGLE INITIALIZATION
-  async initialize() {
-    try {
-      if (this.isInitialized) {
-        console.log('🔐 Encryption service already initialized');
-        return true;
-      }
-
-      console.log('🔐 Initializing encryption service...');
-      await this.ensureInitialized();
-
-      console.log('🔐 Encryption service initialized successfully');
-      return true;
-    } catch (error) {
-      console.error('❌ Failed to initialize encryption service:', error);
-      return false;
-    }
-  }
-
-  // Clear all stored keys (for logout) - IMPROVED
+  // Clear all stored keys (for logout)
   clearKeys() {
-    localStorage.removeItem(this.keyStorageKey);
-    localStorage.removeItem('contactPublicKeys');
+    if (this.keyStorageKey) {
+      localStorage.removeItem(this.keyStorageKey);
+    }
+    localStorage.removeItem("contactPublicKeys");
 
     this.publicKey = null;
     this.privateKey = null;
@@ -471,56 +781,27 @@ class EncryptionService {
     this.contactKeys.clear();
     this.isInitialized = false;
     this.initPromise = null;
+    this.currentUsername = null;
+    this.keyUploadPending = false;
 
-    console.log('🔐 All encryption keys cleared');
+    try {
+      const store = usePassphraseStore.getState();
+      if (store.clearPassphrase) {
+        store.clearPassphrase();
+      }
+    } catch (err) {
+      console.warn("⚠️ Failed to clear passphrase from store:", err);
+    }
+
+    console.log("🔐 All encryption keys cleared");
   }
 
   // Check if we have a contact's public key
   hasContactKey(username) {
     return (
       this.contactKeys.has(username) ||
-      JSON.parse(localStorage.getItem("contactPublicKeys") || "{}")[
-        username
-      ] !== undefined
+      this.getSafeContactKeyStore()[username] !== undefined
     );
-  }
-
-  // Store contact's public key
-  storeContactPublicKey(username, publicKeyJwk) {
-    try {
-      this.contactKeys.set(username, publicKeyJwk);
-      const contactKeys = JSON.parse(localStorage.getItem('contactPublicKeys') || '{}');
-      contactKeys[username] = publicKeyJwk;
-      localStorage.setItem('contactPublicKeys', JSON.stringify(contactKeys));
-      console.log(`🔐 Stored public key for ${username}`);
-    } catch (error) {
-      console.error('❌ Failed to store contact public key:', error);
-    }
-  }
-
-  // Exchange public keys with a contact
-  async exchangePublicKeys(contactUsername) {
-    try {
-      console.log(`🔐 Simulating key exchange with ${contactUsername}`);
-      const ourPublicKey = await this.getPublicKeyJwk();
-
-      const response = await fetch(`http://localhost:8080/api/keys/upload`,{
-        method : "POST",
-        headers : {"Content-Type":"application/json"},
-        body: JSON.stringify({
-          username: this.currentUsername,
-          publicKeyJwk: ourPublicKey
-        }),
-      });
-      if(!response.ok){
-        throw new Error("Failed to upload key");
-      }
-      console.log(`🔐 Key exchange completed with ${contactUsername}`);
-      return true;
-    } catch (error) {
-      console.error('❌ Key exchange failed:', error);
-      return false;
-    }
   }
 }
 

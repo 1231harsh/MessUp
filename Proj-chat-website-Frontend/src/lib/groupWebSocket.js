@@ -1,5 +1,6 @@
 import SockJS from 'sockjs-client';
 import Stomp from 'stompjs';
+const API_BASE_URL = import.meta.env.VITE_BASE_URL;
 
 class GroupWebSocketService {
   constructor() {
@@ -16,7 +17,7 @@ class GroupWebSocketService {
         console.log('🔌 Connecting Group WebSocket for user:', username);
         this.currentUsername = username;
 
-        const socket = new SockJS('http://localhost:8080/chat');
+        const socket = new SockJS(`${API_BASE_URL}/chat`);
         this.stompClient = Stomp.over(socket);
 
         // Disable debug to reduce noise

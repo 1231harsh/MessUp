@@ -1,5 +1,5 @@
-import { Routes, Route, Navigate } from "react-router-dom";
-import { useEffect } from "react";
+import { Routes, Route, Navigate, useLocation } from "react-router-dom";
+import { useEffect, useState } from "react";
 import Navbar from "./components/Navbar";
 import HomePage from "./pages/HomePage";
 import SettingsPage from "./pages/SettingsPage";
@@ -10,30 +10,69 @@ import LoginPage from "./pages/LoginPage";
 import SignUpPage from "./pages/SignUpPage";
 import ProtectedRoute from "./components/ProtectedRoute";
 import { useAuthStore } from "./store/useAuthStore";
+import PassphraseModal from "./components/PassphraseModal";
+import encryptionService from "./lib/encryption";
 
 const App = () => {
   const { theme } = useThemeStore();
-  const { isAuthenticated, checkAuthStatus } = useAuthStore();
+  const { isAuthenticated, isLoading, checkAuthStatus } = useAuthStore();
+  const location = useLocation();
 
-  // Check auth status on app load and periodically
+  const [showModal, setShowModal] = useState(false);
+  const [modalResolve, setModalResolve] = useState(null);
+
+  // Run auth check only if not on login/signup
   useEffect(() => {
-    // Check immediately
-    checkAuthStatus();
-
-    // Check every 5 minutes
-    const interval = setInterval(() => {
+    if (location.pathname !== "/login" && location.pathname !== "/signup") {
       checkAuthStatus();
-    }, 5 * 60 * 1000); // 5 minutes
+    }
+  }, [location.pathname]);
 
-    return () => clearInterval(interval);
-  }, [checkAuthStatus]);
+  useEffect(() => {
+    encryptionService.setPassphraseHandler(() => {
+      return new Promise((resolve) => {
+        setModalResolve(() => resolve);
+        setShowModal(true);
+      });
+    });
+  }, []);
+
+  const handlePassphraseSubmit = (passphrase) => {
+    if (modalResolve) modalResolve(passphrase);
+    setModalResolve(null);
+    setShowModal(false);
+  };
+
+  const handlePassphraseCancel = () => {
+    if (modalResolve) modalResolve(null);
+    setModalResolve(null);
+    setShowModal(false);
+  };
+
+  // Only show loading screen for protected routes
+  const isProtectedRoute =
+    location.pathname !== "/login" && location.pathname !== "/signup";
+
+  if (isLoading && isProtectedRoute) {
+    return (
+      <div className="flex justify-center items-center h-screen">
+        <p className="text-lg text-gray-600">🔄 Checking authentication...</p>
+      </div>
+    );
+  }
 
   return (
     <div data-theme={theme}>
       <Toaster position="top-right" />
       <Navbar />
+
+      <PassphraseModal
+        visible={showModal}
+        onSubmit={handlePassphraseSubmit}
+        onCancel={handlePassphraseCancel}
+      />
+
       <Routes>
-        {/* Redirect from root to login if not authenticated */}
         <Route
           path="/"
           element={
@@ -46,8 +85,6 @@ const App = () => {
             )
           }
         />
-
-        {/* Auth routes - accessible only when not logged in */}
         <Route
           path="/login"
           element={isAuthenticated ? <Navigate to="/" /> : <LoginPage />}
@@ -56,8 +93,6 @@ const App = () => {
           path="/signup"
           element={isAuthenticated ? <Navigate to="/" /> : <SignUpPage />}
         />
-
-        {/* Protected routes - require authentication */}
         <Route
           path="/settings"
           element={

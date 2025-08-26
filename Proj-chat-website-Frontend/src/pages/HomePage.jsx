@@ -5,8 +5,8 @@ import GroupChatContainer from "../components/GroupChatContainer";
 import NoChatSelected from "../components/NoChatSelected";
 import { useChatStore } from "../store/useChatStore";
 import { useGroupChatStore } from "../store/useGroupChatStore";
-import { getCurrentUserFromToken } from "../lib/jwtUtils";
 import toast from "react-hot-toast";
+// import ErrorBoundary from "../components/ErrorBoundary"; // Optional
 
 const HomePage = () => {
   const [selectedUser, setSelectedUser] = useState(null);
@@ -17,49 +17,42 @@ const HomePage = () => {
     initializeWebSocket,
     disconnectWebSocket,
     isConnected: chatConnected,
-    isLoading: chatLoading
+    isLoading: chatLoading,
   } = useChatStore();
 
   const {
     initializeGroupWebSocket,
     disconnectGroupWebSocket,
     isConnected: groupChatConnected,
-    isLoading: groupChatLoading
+    isLoading: groupChatLoading,
   } = useGroupChatStore();
 
-  // Initialize WebSocket connections when component mounts
   useEffect(() => {
     const initChat = async () => {
-      // Initialize regular chat
       const chatSuccess = await initializeWebSocket();
-      if (!chatSuccess) {
-        toast.error('Failed to connect to chat service');
-      }
+      if (!chatSuccess) toast.error("Failed to connect to chat service");
 
-      // Initialize group chat
-      const groupChatSuccess = await initializeGroupWebSocket();
-      if (!groupChatSuccess) {
-        toast.error('Failed to connect to group chat service');
-      }
+      const groupSuccess = await initializeGroupWebSocket();
+      if (!groupSuccess) toast.error("Failed to connect to group chat service");
     };
 
     initChat();
 
-    // Cleanup on unmount
     return () => {
       disconnectWebSocket();
       disconnectGroupWebSocket();
     };
-  }, [initializeWebSocket, disconnectWebSocket, initializeGroupWebSocket, disconnectGroupWebSocket]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []); // ensure these methods are stable or memoized in stores
 
   const handleSelectUser = (user) => {
     setSelectedUser(user);
-    setSelectedGroup(null); // Clear group selection
+    setSelectedGroup(null);
   };
 
   const handleSelectGroup = (group) => {
     setSelectedGroup(group);
-    setSelectedUser(null); // Clear user selection
+    setSelectedUser(null);
   };
 
   const handleCloseChat = () => {
@@ -68,13 +61,11 @@ const HomePage = () => {
   };
 
   const handleTabChange = (tabId) => {
+    if (tabId === activeTab) return;
+
     setActiveTab(tabId);
-    // Clear selections when switching tabs
-    if (tabId === "groups" && selectedUser) {
-      setSelectedUser(null);
-    } else if (tabId !== "groups" && selectedGroup) {
-      setSelectedGroup(null);
-    }
+    setSelectedUser(null);
+    setSelectedGroup(null);
   };
 
   const isConnected = chatConnected && groupChatConnected;
@@ -84,7 +75,6 @@ const HomePage = () => {
     <div className="h-screen bg-base-200">
       <div className="flex items-center justify-center pt-20 px-4">
         <div className="bg-base-100 rounded-lg shadow-cl w-full max-w-6xl h-[calc(100vh-8rem)]">
-          {/* Connection Status Indicator */}
           {!isConnected && !isLoading && (
             <div className="bg-warning text-warning-content px-4 py-2 text-sm text-center">
               Chat service disconnected. Trying to reconnect...
@@ -104,15 +94,19 @@ const HomePage = () => {
             {!selectedUser && !selectedGroup ? (
               <NoChatSelected />
             ) : selectedGroup ? (
+              // <ErrorBoundary fallback={<div>Group chat failed to load.</div>}>
               <GroupChatContainer
                 selectedGroup={selectedGroup}
                 onClose={handleCloseChat}
               />
             ) : (
+              // </ErrorBoundary>
+              // <ErrorBoundary fallback={<div>Chat failed to load.</div>}>
               <ChatContainer
                 selectedUser={selectedUser}
                 onClose={handleCloseChat}
               />
+              // </ErrorBoundary>
             )}
           </div>
         </div>

@@ -19,7 +19,7 @@ export const getCurrentUserFromToken = async () => {
   }
 };
 
-// For backward compatibility, create a synchronous version that returns cached data
+
 let cachedUser = null;
 
 export const getCurrentUserFromTokenSync = () => {

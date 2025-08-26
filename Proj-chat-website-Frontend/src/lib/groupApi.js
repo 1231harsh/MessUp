@@ -1,29 +1,15 @@
 import axios from 'axios';
 
 // Configure axios for group API calls
-const API_BASE_URL = 'http://localhost:8080';
+const API_BASE_URL = import.meta.env.VITE_BASE_URL;
 
 const groupApi = axios.create({
   baseURL: API_BASE_URL,
   headers: {
     'Content-Type': 'application/json',
   },
-  withCredentials: true,
+  withCredentials: true, // This is the key for cookie-based auth
 });
-
-// Add request interceptor to include auth token
-groupApi.interceptors.request.use(
-  (config) => {
-    const token = localStorage.getItem('token');
-    if (token) {
-      config.headers.Authorization = `Bearer ${token}`;
-    }
-    return config;
-  },
-  (error) => {
-    return Promise.reject(error);
-  }
-);
 
 // Add response interceptor to handle errors
 groupApi.interceptors.response.use(
@@ -36,6 +22,13 @@ groupApi.interceptors.response.use(
         (error.response?.data && typeof error.response.data === 'string' &&
          error.response.data.includes('oauth2'))) {
       console.error('❌ Backend is redirecting to OAuth - check authentication');
+      throw new Error('Authentication required - please login again');
+    }
+
+    // Handle HTML responses (OAuth2 redirects)
+    if (error.response?.data && typeof error.response.data === 'string' &&
+        (error.response.data.includes('<!DOCTYPE html>') || error.response.data.includes('<html>'))) {
+      console.error('❌ Received HTML response instead of JSON - likely OAuth2 redirect');
       throw new Error('Authentication required - please login again');
     }
 
