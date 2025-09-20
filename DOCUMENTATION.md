@@ -28,7 +28,7 @@ Backend:
     Java 17
     Spring Boot
     WebSocket (Spring)
-    MySQL (RDBMS)
+    PostgresSQL (RDBMS)
     Spring Security (for auth)
     JPA/Hibernate
 
