@@ -59,7 +59,7 @@ const useChatStore = create((set, get) => ({
   disconnectWebSocket: () => {
     webSocketService.removeMessageHandler('chatStore');
     webSocketService.disconnect();
-    encryptionService.clearKeys();
+    // encryptionService.clearKeys();
     set({ isConnected: false });
   },
 
