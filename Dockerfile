@@ -10,7 +10,8 @@ COPY proj-chat-website-Backend /app
 RUN mvn clean package -DskipTests
 
 # Stage 2: Run the app with JDK Slim
-FROM openjdk:17-jdk-slim
+# FROM openjdk:17-jdk-slim
+FROM eclipse-temurin:17-jdk-jammy
 
 WORKDIR /app
 
