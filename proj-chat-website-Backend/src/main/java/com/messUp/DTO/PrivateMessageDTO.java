@@ -9,6 +9,7 @@ import java.time.LocalDateTime;
 public class PrivateMessageDTO {
 
     private Long messageId;
+    private String tempId;
     private String message;
     private String sender;
     private String receiver;

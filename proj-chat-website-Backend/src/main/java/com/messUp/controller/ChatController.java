@@ -1,6 +1,6 @@
 package com.messUp.controller;
 
-import com.messUp.service.ChatService;
+import com.messUp.service.PrivateChatService;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.RequestMapping;
@@ -12,10 +12,10 @@ import java.security.Principal;
 @RequestMapping("/api/chats")
 public class ChatController {
 
-    private final ChatService chatService;
+    private final PrivateChatService privateChatService;
 
-    public ChatController(ChatService chatService) {
-        this.chatService = chatService;
+    public ChatController(PrivateChatService privateChatService) {
+        this.privateChatService = privateChatService;
     }
 
     @GetMapping("/recent")
@@ -26,7 +26,7 @@ public class ChatController {
 
         String username = principal.getName();
         try {
-            return ResponseEntity.ok(chatService.getRecentChats(username));
+            return ResponseEntity.ok(privateChatService.getRecentChats(username));
         } catch (Exception e) {
             return ResponseEntity.status(500).body("Error retrieving recent chats: " + e.getMessage());
         }

@@ -1,15 +1,13 @@
 import { create } from "zustand";
 import webSocketService from "../lib/websocket";
-import { getCurrentUser } from "../lib/api";
-import { getOldChatMessages } from "../lib/api";
+import { getCurrentUser, getOldChatMessages } from "../lib/api";
 import encryptionService from "../lib/encryption";
 import { useAuthStore } from "./useAuthStore";
 
-
 const useChatStore = create((set, get) => ({
   // State
-  messages: {},
-  messageStatuses: {},
+  messages: {}, // { username: [msg1, msg2, ...] }
+  messageStatuses: {}, // { messageId: 'SENT' | 'DELIVERED' | 'READ' }
   selectedUser: null,
   isConnected: false,
   isLoading: false,
@@ -18,38 +16,27 @@ const useChatStore = create((set, get) => ({
 
   // Initialize WebSocket and encryption
   initializeWebSocket: async () => {
-
     const { isAuthenticated } = useAuthStore.getState();
-    if (!isAuthenticated) {
-      console.warn("⚠️ Skipping WebSocket init — not authenticated");
-      return;
-    }
+    if (!isAuthenticated) return;
 
     try {
-      // Get current user from backend
       const currentUser = await getCurrentUser();
-      if (!currentUser?.username) {
-        console.error('❌ No username found');
-        return false;
-      }
+      if (!currentUser?.username) return false;
 
       set({ currentUser, isLoading: true });
 
-      // Initialize encryption service with username
-      console.log('🔐 Initializing encryption for user:', currentUser.username);
       await encryptionService.initialize(currentUser.username);
-
       await webSocketService.connect(currentUser.username);
 
-      webSocketService.addMessageHandler('chatStore', (messageData) => {
-        get().handleIncomingMessage(messageData);
-      });
+      webSocketService.addMessageHandler(
+        "chatStore",
+        get().handleIncomingMessage
+      );
 
       set({ isConnected: true, isLoading: false });
-      console.log('✅ WebSocket and encryption ready');
       return true;
     } catch (error) {
-      console.error('❌ WebSocket failed:', error);
+      console.error("WebSocket init failed:", error);
       set({ isConnected: false, isLoading: false });
       return false;
     }
@@ -57,291 +44,298 @@ const useChatStore = create((set, get) => ({
 
   // Disconnect
   disconnectWebSocket: () => {
-    webSocketService.removeMessageHandler('chatStore');
+    webSocketService.removeMessageHandler("chatStore");
     webSocketService.disconnect();
-    // encryptionService.clearKeys();
     set({ isConnected: false });
   },
 
-  // Load old messages for a user and decrypt them
+  // Load old messages
   loadOldMessages: async (username) => {
     const { loadingOldMessages } = get();
-
-    if (loadingOldMessages[username]) {
-      return;
-    }
+    if (loadingOldMessages[username]) return;
 
     set((state) => ({
-      loadingOldMessages: {
-        ...state.loadingOldMessages,
-        [username]: true
-      }
+      loadingOldMessages: { ...state.loadingOldMessages, [username]: true },
     }));
 
     try {
-      console.log('🔄 Loading old messages for:', username);
       const oldMessages = await getOldChatMessages(username);
 
-      console.log('📥 Loaded old messages:', oldMessages.length);
-
-      // Process messages and attempt decryption
       const processedMessages = await Promise.all(
         oldMessages.map(async (msg, index) => {
-          if (!msg.text || typeof msg.text !== 'string') {
-            console.warn(`⚠️ Message ${index} has no text or invalid text format`);
-            return {
-              ...msg,
-              text: '[Empty message]',
-              decryptionFailed: true
-            };
-          }
+          let text = msg.text || "[Empty message]";
+          let isEncrypted = false;
+          let decryptionFailed = false;
 
-          if (encryptionService.isEncryptedMessage(msg.text)) {
+          if (msg.text && encryptionService.isEncryptedMessage(msg.text)) {
             try {
-              console.log(`🔓 Attempting to decrypt old message ${index}...`);
-              const decryptedText = await encryptionService.decryptMessage(msg.text);
-
-              if (decryptedText &&
-                  !decryptedText.startsWith('[') &&
-                  !decryptedText.includes('could not be decrypted') &&
-                  !decryptedText.includes('key mismatch')) {
-                console.log(`✅ Old message ${index} decrypted successfully`);
-                return {
-                  ...msg,
-                  text: decryptedText,
-                  isEncrypted: true,
-                  decryptionSuccessful: true
-                };
-              } else {
-                console.warn(`⚠️ Decryption failed for message ${index}:`, decryptedText);
-                return {
-                  ...msg,
-                  text: decryptedText || '[Message could not be decrypted]',
-                  isEncrypted: true,
-                  decryptionFailed: true
-                };
-              }
-            } catch (error) {
-              console.warn(`⚠️ Failed to decrypt old message ${index}:`, error);
-              return {
-                ...msg,
-                text: '[Message could not be decrypted]',
-                isEncrypted: true,
-                decryptionFailed: true
-              };
+              const decrypted = await encryptionService.decryptMessage(
+                msg.text
+              );
+              if (decrypted) text = decrypted;
+              isEncrypted = true;
+            } catch (e) {
+              text = "[Message could not be decrypted]";
+              isEncrypted = true;
+              decryptionFailed = true;
             }
           }
 
-          return {
-            ...msg,
-            isEncrypted: false
-          };
+          const status = msg.status || "SENT";
+
+          return { ...msg, text, isEncrypted, decryptionFailed,status};
         })
       );
 
-      const sortedMessages = processedMessages.sort((a, b) =>
-        new Date(a.createdAt) - new Date(b.createdAt)
+      processedMessages.sort(
+        (a, b) => new Date(a.createdAt) - new Date(b.createdAt)
       );
 
       set((state) => ({
-        messages: {
-          ...state.messages,
-          [username]: sortedMessages
-        },
-        loadingOldMessages: {
-          ...state.loadingOldMessages,
-          [username]: false
-        }
+        messages: { ...state.messages, [username]: processedMessages },
+        loadingOldMessages: { ...state.loadingOldMessages, [username]: false },
       }));
 
-      return sortedMessages;
+      return processedMessages;
     } catch (error) {
-      console.error('❌ Failed to load old messages:', error);
-
+      console.error("Failed to load old messages:", error);
       set((state) => ({
-        loadingOldMessages: {
-          ...state.loadingOldMessages,
-          [username]: false
-        }
+        loadingOldMessages: { ...state.loadingOldMessages, [username]: false },
       }));
-
       return [];
     }
   },
 
-  // Select user and set up encryption
+  // Select a user
   selectUser: async (user) => {
     set({ selectedUser: user });
-
-    console.log(`🔐 Setting up chat with ${user.username}...`);
-
     const { messages } = get();
     if (!messages[user.username] || messages[user.username].length === 0) {
       await get().loadOldMessages(user.username);
     }
   },
 
-  // Send message (will be encrypted automatically)
+  // Send a message
   sendMessage: async (text, image = null) => {
     const { selectedUser, currentUser } = get();
-
-    if (!selectedUser || !currentUser || !text.trim()) {
+    if (
+      !selectedUser ||
+      !currentUser ||
+      !text.trim() ||
+      !webSocketService.isConnected()
+    ) {
+      console.log("❌ Cannot send: missing user, text, or not connected");
       return false;
     }
 
-    if (!webSocketService.isConnected()) {
-      console.error('❌ Not connected');
-      return false;
-    }
+    const tempMessageId = `temp-${Date.now()}-${Math.random()
+      .toString(36)
+      .substr(2, 9)}`;
+    console.log(tempMessageId,"This is tempMessageId");
+    const tempMessage = {
+      _id: tempMessageId,
+      clientId: tempMessageId,
+      senderId: currentUser.username,
+      receiverId: selectedUser.username,
+      text,
+      createdAt: new Date().toISOString(),
+      isTemp: true,
+      status: "SENDING",
+    };
+
+    console.log("📤 Adding temp message:", tempMessage);
+
+    set((state) => ({
+      messages: {
+        ...state.messages,
+        [selectedUser.username]: [
+          ...(state.messages[selectedUser.username] || []),
+          tempMessage,
+        ],
+      },
+      messageStatuses: { ...state.messageStatuses, [tempMessageId]: "SENDING" },
+    }));
 
     try {
-      const messageId = `msg-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`;
-
-      const tempMessage = {
-        _id: messageId,
-        senderId: currentUser.username,
-        receiverId: selectedUser.username,
-        text: text,
-        createdAt: new Date().toISOString(),
-        isTemp: true,
-        status: 'SENT'
-      };
-
-      set((state) => ({
-        messages: {
-          ...state.messages,
-          [selectedUser.username]: [
-            ...(state.messages[selectedUser.username] || []),
-            tempMessage
-          ]
-        },
-        messageStatuses: {
-          ...state.messageStatuses,
-          [messageId]: 'SENT'
-        }
-      }));
-
       await webSocketService.sendPrivateMessage(
         currentUser.username,
         selectedUser.username,
-        text
+        text,
+        tempMessageId
       );
-
+      console.log("✅ Message sent to backend, waiting for confirmation");
       return true;
     } catch (error) {
-      console.error('❌ Send failed:', error);
+      console.error("❌ Send failed:", error);
+      get().updateMessageStatus(selectedUser.username, tempMessageId, "FAILED");
       return false;
     }
   },
 
-  // Handle incoming messages (decrypt them if needed)
+  // Handle incoming message
   handleIncomingMessage: async (messageData) => {
     const { currentUser } = get();
     if (!currentUser) return;
 
-    const otherUser = messageData.sender === currentUser.username
-      ? messageData.receiver
-      : messageData.sender;
+    console.log("📨 Incoming message:", messageData);
 
-    let decryptedText = messageData.message;
-    let isEncrypted = false;
-    let decryptionFailed = false;
+    const { type } = messageData; // "private", "delivered", "read"
+    const otherUser =
+      messageData.sender === currentUser.username
+        ? messageData.receiver
+        : messageData.sender;
 
-    if (messageData.message && encryptionService.isEncryptedMessage(messageData.message)) {
-      try {
-        console.log('🔓 Attempting to decrypt incoming message...');
-        decryptedText = await encryptionService.decryptMessage(messageData.message);
+    if (type === "sent") {
+      let text = messageData.message;
+      let isEncrypted = false;
+      let decryptionFailed = false;
 
-        if (decryptedText &&
-            !decryptedText.startsWith('[') &&
-            !decryptedText.includes('could not be decrypted') &&
-            !decryptedText.includes('key mismatch')) {
+      console.log("00000000000000000000000000000000inside00000000000000000000000000000000");
+      if (text && encryptionService.isEncryptedMessage(text)) {
+        try {
+          const decrypted = await encryptionService.decryptMessage(text);
+          text = decrypted || "[Message could not be decrypted]";
           isEncrypted = true;
-          console.log('✅ Incoming message decrypted successfully');
-        } else {
-          console.error('❌ Decryption failed:', decryptedText);
+        } catch {
+          text = "[Message could not be decrypted]";
           isEncrypted = true;
           decryptionFailed = true;
         }
-      } catch (error) {
-        console.error('❌ Failed to decrypt incoming message:', error);
-        decryptedText = '[Message could not be decrypted]';
-        isEncrypted = true;
-        decryptionFailed = true;
       }
-    }
 
-    const formattedMessage = {
-      _id: messageData.messageId || `ws-${Date.now()}-${Math.random()}`,
-      senderId: messageData.sender,
-      receiverId: messageData.receiver,
-      text: decryptedText,
-      createdAt: messageData.timestamp || new Date().toISOString(),
-      status: 'DELIVERED',
-      isEncrypted: isEncrypted,
-      decryptionFailed: decryptionFailed
-    };
+      const formattedMessage = {
+        _id: messageData.messageId,
+        senderId: messageData.sender,
+        receiverId: messageData.receiver,
+        text,
+        createdAt: messageData.timestamp || new Date().toISOString(),
+        status: "SENT",
+        isEncrypted,
+        decryptionFailed,
+      };
 
-    set((state) => {
-      const existing = state.messages[otherUser] || [];
+      console.log("💬 Formatted message:", formattedMessage);
 
-      const filtered = existing.filter((msg) => {
-        const isDuplicate =
-          msg.senderId === formattedMessage.senderId &&
-          msg.text === formattedMessage.text &&
-          Math.abs(
-            new Date(msg.createdAt) - new Date(formattedMessage.createdAt)
-          ) < 2000;
-        return !isDuplicate;
-      });
+      set((state) => {
+        const existing = state.messages[otherUser] || [];
 
-      return {
-        messages: {
-          ...state.messages,
-          [otherUser]: [...filtered, formattedMessage]
-        },
-        messageStatuses: {
-          ...state.messageStatuses,
-          [formattedMessage._id]: 'DELIVERED'
+        const tempIndex = existing.findIndex(
+          (m) =>
+            m.isTemp &&
+            m.clientId &&
+            messageData.clientId &&
+            m.clientId === messageData.clientId
+        );
+
+        let newMessages;
+        if (tempIndex !== -1) {
+          console.log("🔄 Replacing temp message at index", tempIndex);
+          existing[tempIndex] = { ...formattedMessage, isTemp: false };
+          newMessages = [...existing];
+        } else {
+          const filtered = existing.filter((msg) => {
+            const isDuplicate =
+              msg.senderId === formattedMessage.senderId &&
+              msg.text === formattedMessage.text &&
+              Math.abs(
+                new Date(msg.createdAt) - new Date(formattedMessage.createdAt)
+              ) < 2000;
+            return !isDuplicate;
+          });
+          newMessages = [...filtered, formattedMessage];
         }
+
+        const newMessageStatuses = {
+          ...state.messageStatuses,
+          [formattedMessage._id]: formattedMessage.status,
+        };
+
+        console.log("📊 Updated messages for", otherUser, newMessages);
+        console.log("📊 Updated messageStatuses:", newMessageStatuses);
+
+        return {
+          messages: { ...state.messages, [otherUser]: newMessages },
+          messageStatuses: newMessageStatuses,
+        };
+      });
+    } else if (type === "delivered" || type === "read") {
+      console.log(
+        `🔔 Updating message status to ${type.toUpperCase()} for messageId:`,
+        messageData.messageId
+      );
+      console.log(messageData.tempId,"Line 263");
+      get().updateMessageStatus(
+        otherUser,
+        messageData.messageId,
+        type.toUpperCase(),
+        messageData.message,
+        messageData.tempId
+      );
+    }
+  },
+
+  // Update message status manually
+  updateMessageStatus: (username, messageId, status, messageText, tempId) => {
+    set((state) => {
+      const msgs = state.messages[username] || [];
+      console.log(
+        "🔄 Updating status. username:",
+        username,
+        "messageId:",
+        messageId,
+        "status:",
+        status,
+        "messageText:",
+        messageText,
+        "tempId:",
+        tempId
+      );
+
+
+      console.log(tempId);
+
+      const index = msgs.findIndex(
+        (m) =>
+          m._id === messageId ||
+          (m.isTemp && m.text === messageText) ||
+          (m.isTemp && tempId && m.clientId === tempId)
+      );
+
+      if (index !== -1) {
+        console.log("✅ Found message to update at index", index);
+        msgs[index] = { ...msgs[index], _id: messageId, status, isTemp: false };
+      } else {
+        console.warn(
+          "⚠️ Could not find message to update with ID or text match"
+        );
+      }
+
+      const newMessageStatuses = {
+        ...state.messageStatuses,
+        [messageId]: status,
+      };
+      return {
+        messages: { ...state.messages, [username]: msgs },
+        messageStatuses: newMessageStatuses,
       };
     });
   },
 
-  // Get messages for user
-  getMessagesForUser: (username) => {
-    const { messages } = get();
-    return messages[username] || [];
-  },
-
-  // Get last message
+  // Getters
+  getMessagesForUser: (username) => get().messages[username] || [],
   getLastMessageForUser: (username) => {
     const messages = get().getMessagesForUser(username);
-    return messages.length > 0 ? messages[messages.length - 1] : null;
+    return messages.length ? messages[messages.length - 1] : null;
   },
-
-  // Get unread count
   getUnreadCountForUser: (username) => {
     const { messages, currentUser } = get();
-    const userMessages = messages[username] || [];
-
-    return userMessages.filter(msg =>
-      msg.senderId !== currentUser?.username &&
-      (!msg.status || msg.status !== 'read')
+    return (messages[username] || []).filter(
+      (msg) => msg.senderId !== currentUser?.username && msg.status !== "READ"
     ).length;
   },
-
-  // Get message status
-  getMessageStatus: (messageId) => {
-    const { messageStatuses } = get();
-    return messageStatuses[messageId] || 'SENT';
-  },
-
-  // Check if old messages are loading
-  isLoadingOldMessages: (username) => {
-    const { loadingOldMessages } = get();
-    return loadingOldMessages[username] || false;
-  }
+  getMessageStatus: (messageId) => get().messageStatuses[messageId] || "SENT",
+  isLoadingOldMessages: (username) =>
+    get().loadingOldMessages[username] || false,
 }));
 
 export { useChatStore };

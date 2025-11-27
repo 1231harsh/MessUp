@@ -439,7 +439,7 @@ export const getUnreadNotifications = async () => {
     console.log('Fetching notifications from backend...');
     const notificationsApi = createNotificationsApi();
     const response = await notificationsApi.get('/notifications/unread');
-    console.log('Notifications response:', response.data);
+    // console.log('Notifications response:', response.data);
 
     let notifications = response.data;
 

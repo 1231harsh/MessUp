@@ -3,9 +3,7 @@ package com.messUp.controller;
 import com.messUp.DTO.PrivateMessageDTO;
 import com.messUp.DTO.ReadReceiptDTO;
 import com.messUp.entity.PrivateMessage;
-import com.messUp.entity.User;
-import com.messUp.repository.PrivateMessageRepository;
-import com.messUp.repository.UserRepository;
+import com.messUp.service.PrivateChatService;
 import org.springframework.http.ResponseEntity;
 import org.springframework.messaging.handler.annotation.MessageMapping;
 import org.springframework.messaging.simp.SimpMessagingTemplate;
@@ -20,72 +18,40 @@ import java.util.List;
 public class PrivateChatController {
 
     private final SimpMessagingTemplate messagingTemplate;
-    private final PrivateMessageRepository privateMessageRepository;
-    private final UserRepository userRepository;
+    private final PrivateChatService privateChatService;
 
     public PrivateChatController(SimpMessagingTemplate messagingTemplate,
-                                 PrivateMessageRepository privateMessageRepository,
-                                 UserRepository userRepository) {
+                                 PrivateChatService privateChatService) {
         this.messagingTemplate = messagingTemplate;
-        this.privateMessageRepository = privateMessageRepository;
-        this.userRepository = userRepository;
+        this.privateChatService = privateChatService;
+
     }
 
     @MessageMapping("/sendPrivateMessage")
     public void sendPrivateMessage(PrivateMessageDTO privateMessageDTO) {
-        User sender = userRepository.findByUsername(privateMessageDTO.getSender()).orElseThrow(() -> new RuntimeException("Sender not found"));
-        User receiver = userRepository.findByUsername(privateMessageDTO.getReceiver()).orElseThrow(() -> new RuntimeException("Receiver not found"));
+        System.out.println(privateMessageDTO.getTempId());
+        PrivateMessage savedMessage  = privateChatService.sendMessage(privateMessageDTO);
 
-        PrivateMessage privateMessage = new PrivateMessage();
-        privateMessage.setSender(sender);
-        privateMessage.setReceiver(receiver);
-        privateMessage.setMessage(privateMessageDTO.getMessage());
-        privateMessage.setMediaUrl(privateMessageDTO.getMediaUrl());
-        privateMessage.setMediaType(privateMessageDTO.getMediaType());
-        privateMessage.setStatus(PrivateMessage.MessageStatus.SENT);
-        privateMessage.setTimestamp(java.time.LocalDateTime.now());
-
-        privateMessageRepository.save(privateMessage);
-
-        privateMessageDTO.setTimestamp(privateMessage.getTimestamp());
-        privateMessageDTO.setMessageId(privateMessage.getId());
+        privateMessageDTO.setTimestamp(savedMessage.getTimestamp());
+        privateMessageDTO.setMessageId(savedMessage.getId());
 
         messagingTemplate.convertAndSendToUser(privateMessageDTO.getReceiver(), "/private", privateMessageDTO);
 
-        privateMessage.setStatus(PrivateMessage.MessageStatus.DELIVERED);
-        privateMessageRepository.save(privateMessage);
+        privateChatService.markAsDelivered(savedMessage);
     }
 
     @MessageMapping("/markAsRead")
     public void markAsRead(ReadReceiptDTO readReceiptDTO) {
-        privateMessageRepository.findById(readReceiptDTO.getMessageId())
-                .ifPresent(privateMessage -> {
-                    privateMessage.setStatus(PrivateMessage.MessageStatus.READ);
-                    privateMessageRepository.save(privateMessage);
-                    messagingTemplate.convertAndSendToUser(privateMessage.getSender().getUsername(), "/private/read-receipts", readReceiptDTO);
-                });
+        ReadReceiptDTO receipt = privateChatService.markMessageAsRead(readReceiptDTO);
+
+        // Notify sender about read receipt
+        messagingTemplate.convertAndSendToUser(receipt.getSender(), "/private/read-receipts", receipt);
     }
 
     @GetMapping("oldChat/{username}")
     public ResponseEntity<List<PrivateMessageDTO>> getChatHistory(Principal principal,@PathVariable String username) {
         String currentUsername = principal.getName();
-        User user = userRepository.findByUsername(username)
-                .orElseThrow(() -> new RuntimeException("User not found with username: " + username));
-
-        List<PrivateMessage> messages = privateMessageRepository.findConversationBetween(currentUsername, username);
-
-        List<PrivateMessageDTO> privateMessageDTOs = messages.stream()
-                .map(message -> {
-                    PrivateMessageDTO dto = new PrivateMessageDTO();
-                    dto.setMessage(message.getMessage());
-                    dto.setSender(message.getSender().getUsername());
-                    dto.setReceiver(message.getReceiver().getUsername());
-                    dto.setMediaUrl(message.getMediaUrl());
-                    dto.setMediaType(message.getMediaType());
-                    dto.setTimestamp(message.getTimestamp());
-                    return dto;
-                })
-                .toList();
-        return ResponseEntity.ok(privateMessageDTOs);
+        List<PrivateMessageDTO> chatHistory = privateChatService.getChatHistory(currentUsername, username);
+        return ResponseEntity.ok(chatHistory);
     }
 }
