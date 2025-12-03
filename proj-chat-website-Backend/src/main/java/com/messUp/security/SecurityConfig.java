@@ -46,11 +46,17 @@ public class SecurityConfig {
                         .authenticationEntryPoint(new HttpStatusEntryPoint(HttpStatus.UNAUTHORIZED))
                 )
                 .authorizeHttpRequests(auth -> auth
-                    .requestMatchers("/api/**","/chat/**","/oauth2/**").permitAll()
+                    .requestMatchers("/api/**","/chat/**","/oauth2/**,/login/**").permitAll()
                     .anyRequest().authenticated()
                 )
                 .oauth2Login(oauth2 -> oauth2
                         .successHandler(successHandler)
+                        .failureHandler((request, response, exception) -> {
+                            exception.printStackTrace();
+                            response.setStatus(HttpStatus.UNAUTHORIZED.value());
+                            response.setContentType("application/json");
+                            response.getWriter().write("{\"error\": \"OAuth2 Authentication Failed\"}"+exception.getMessage());
+                        })
                 )
                 .sessionManagement(session -> session
                     .sessionCreationPolicy(SessionCreationPolicy.IF_REQUIRED)
