@@ -58,6 +58,7 @@ public class CustomOAuth2SuccessHandler implements AuthenticationSuccessHandler 
         cookie.setAttribute("SameSite", "None");
         response.addCookie(cookie);
 
+
         response.sendRedirect("http://localhost:5174/");
     }
 }

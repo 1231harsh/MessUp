@@ -55,7 +55,9 @@ public class CustomOAuth2SuccessHandler implements AuthenticationSuccessHandler 
         cookie.setSecure(true); // Set to true if using HTTPS
         cookie.setPath("/");
         cookie.setMaxAge(60 * 60 * 24); // 1 day
+        cookie.setAttribute("SameSite", "None");
         response.addCookie(cookie);
+        
 
         response.sendRedirect("http://localhost:5174/");
     }
