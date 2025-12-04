@@ -56,7 +56,7 @@ public class User {
     private String pendingEmail;
 
     @Column(name = "email_change_otp", length = 200)
-    private String emailChangeOtp;
+    private String emailChangeOtp;     
 
     private LocalDateTime emailChangeOtpExpiresAt;
 

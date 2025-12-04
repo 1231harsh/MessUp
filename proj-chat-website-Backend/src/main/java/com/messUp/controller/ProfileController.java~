@@ -1,0 +1,61 @@
+package com.messUp.controller;
+
+import com.cloudinary.api.ApiResponse;
+import com.messUp.DTO.UserDTO;
+import com.messUp.entity.User;
+import com.messUp.service.ProfileService;
+import com.messUp.service.UserService;
+import org.springframework.http.ResponseEntity;
+import org.springframework.web.bind.annotation.*;
+
+import java.security.Principal;
+
+@RestController
+@RequestMapping("/user/profile")
+public class ProfileController {
+    private final ProfileService profileService;
+    private final UserService userService;
+    public ProfileController(ProfileService profileService, UserService userService) {
+        this.profileService = profileService;
+        this.userService = userService;
+    }
+
+    @GetMapping("/get/me")
+    public ResponseEntity<?> getMyProfile(Principal principal) {
+        try {
+            return ResponseEntity.ok(profileService.getProfile(principal.getName()));
+        } catch (Exception e) {
+            return ResponseEntity.badRequest().body("Error retrieving profile: " + e.getMessage());
+        }
+    }
+
+    @PatchMapping("/update/me")
+    public ResponseEntity<?> updateMyProfile(@RequestBody UserDTO profile, Principal principal) {
+        try {
+            return ResponseEntity.ok(profileService.updateProfile(profile, principal.getName()));
+        } catch (Exception e) {
+            return ResponseEntity.badRequest().body("Error updating profile: " + e.getMessage());
+        }
+    }
+
+    @PutMapping("/update/email")
+    public ResponseEntity<?> updateEmail(@RequestParam String newEmail, Principal principal) {
+        try {
+            User user = userService.getUserByUsername(principal.getName());
+            profileService.setEmail(newEmail,user);
+            return ResponseEntity.ok("Email updated successfully");
+        } catch (Exception e) {
+            return ResponseEntity.badRequest().body("Error updating email: " + e.getMessage());
+        }
+    }
+    @PostMapping("/verify/email-otp")
+    public ResponseEntity<> verifyEmailOtp(@RequestParam String otp, Principal principal) {
+        try {
+            User user = userService.getUserByUsername(principal.getName());
+            profileService.verifyEmailOtp(otp, user);
+            return ResponseEntity.ok("Email verified successfully");
+        } catch (Exception e) {
+            return ResponseEntity.badRequest().body("Error verifying email OTP: " + e.getMessage());
+        }
+    }
+}

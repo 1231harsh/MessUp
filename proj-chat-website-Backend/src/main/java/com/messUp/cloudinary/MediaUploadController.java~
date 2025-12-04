@@ -22,18 +22,18 @@ public class MediaUploadController {
         this.userService = userService;
     }
 
-//    @PostMapping("/profile-picture")
-//    public ResponseEntity<?> uploadProfilePicture(@RequestParam("file") MultipartFile file, Principal principal) {
-//        try {
-//            String username = principal.getName();
-//            Long userId = userService.getIdByUsername(username);
-//            String imageUrl = imageUploadService.uploadMedia(file);
-//            userService.updateProfilePicture(userId, imageUrl);
-//            return ResponseEntity.ok("Profile picture updated successfully");
-//        } catch (Exception e) {
-//            return ResponseEntity.badRequest().body("Error uploading profile picture: " + e.getMessage());
-//        }
-//    }
+    @PostMapping("/profile-picture")
+    public ResponseEntity<?> uploadProfilePicture(@RequestParam("file") MultipartFile file, Principal principal) {
+        try {
+            String username = principal.getName();
+            Long userId = userService.getIdByUsername(username);
+            String imageUrl = imageUploadService.uploadMedia(file);
+            userService.updateProfilePicture(userId, imageUrl);
+            return ResponseEntity.ok("Profile picture updated successfully");
+        } catch (Exception e) {
+            return ResponseEntity.badRequest().body("Error uploading profile picture: " + e.getMessage());
+        }
+    }
 
     @PostMapping("/message-media")
     public ResponseEntity<?> uploadMessageImage(@RequestParam("file") MultipartFile file) {

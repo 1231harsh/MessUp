@@ -10,12 +10,12 @@ public class RecentChatDTO {
 
     private Long messageIid;
     private String username;
-    private String profilePicture;
+    private byte[] profilePicture;
     private String lastMessage;
     private LocalDateTime timestamp;
     private boolean sentByMe;
 
-    public RecentChatDTO(String username, String profilePicture, PrivateMessage lstMessage,String currentUsername) {
+    public RecentChatDTO(String username, byte[] profilePicture, PrivateMessage lstMessage, String currentUsername) {
         this.username = username;
         this.profilePicture = profilePicture;
 
