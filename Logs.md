@@ -67,5 +67,11 @@
 - Bugs Debugged.
 - Website completed, works well for private messaging.
 
+## 11/2025
+**Harsh**
+- OAuth Success Handler debugged and working.
+- Profile edit allowed
+- Email edit via OTP enabled
+
 
 
