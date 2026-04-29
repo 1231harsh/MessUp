@@ -46,7 +46,17 @@ public class SecurityConfig {
                         .authenticationEntryPoint(new HttpStatusEntryPoint(HttpStatus.UNAUTHORIZED))
                 )
                 .authorizeHttpRequests(auth -> auth
-                    .requestMatchers("/api/**","/chat/**","/oauth2/**,/login/**").permitAll()
+                    .requestMatchers(
+                            "/api/auth/login",
+                            "/api/auth/register",
+                            "/api/auth/refresh",
+                            "/oauth2/**",
+                            "/login/**",
+                            "/user/profile/picture/**",
+                            "/error"
+                    ).permitAll()
+                    .requestMatchers("/chat/**").authenticated()
+                    .requestMatchers("/api/**").authenticated()
                     .anyRequest().authenticated()
                 )
                 .oauth2Login(oauth2 -> oauth2
@@ -73,7 +83,7 @@ public class SecurityConfig {
 
     @Bean
     public AuthenticationProvider authProvider() {
-        DaoAuthenticationProvider authProvider = new DaoAuthenticationProvider();
+            DaoAuthenticationProvider authProvider = new DaoAuthenticationProvider();
         authProvider.setUserDetailsService(customUserDetailsService);
         authProvider.setPasswordEncoder(passwordEncoder());
         return authProvider;

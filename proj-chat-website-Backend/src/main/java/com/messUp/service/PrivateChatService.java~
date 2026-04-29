@@ -33,31 +33,6 @@ public class PrivateChatService {
         this.publisher = publisher;
     }
 
-    public List<RecentChatDTO> getRecentChats(String username) {
-        User currentUser = userService.getUserByUsername(username);
-
-        List<PrivateMessage> messages =
-                privateMessageRepository.findLatestMessagePerFriend(currentUser.getId());
-
-        List<RecentChatDTO> recentChats = new ArrayList<>();
-
-        for (PrivateMessage lastMsg : messages) {
-            User friend = lastMsg.getSender().equals(currentUser)
-                    ? lastMsg.getReceiver()
-                    : lastMsg.getSender();
-
-            recentChats.add(new RecentChatDTO(
-                    friend.getUsername(),
-                    friend.getProfilePicture(),
-                    lastMsg,
-                    currentUser.getUsername()
-            ));
-        }
-
-        return recentChats;
-    }
-
-
     /* ================= SEND MESSAGE ================= */
 
     public PrivateMessage sendMessage(PrivateMessageDTO dto) {

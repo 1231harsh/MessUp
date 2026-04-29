@@ -1,0 +1,35 @@
+package com.messUp.service;
+
+import com.messUp.entity.Media;
+import org.springframework.stereotype.Service;
+import org.springframework.web.multipart.MultipartFile;
+
+import java.io.IOException;
+import java.time.Instant;
+import java.util.UUID;
+
+@Service
+public class MediaUploadService {
+
+    public String storeEncryptedImage(MultipartFile file,
+                                      String receiverId,
+                                      String senderId,
+                                      String contentType)  {
+        String mediaId = UUID.randomUUID().toString();
+
+        try{
+            Media media = Media.builder()
+                    .id(mediaId)
+                    .senderId(senderId)
+                    .receiverId(receiverId)
+                    .encryptedData(file.getBytes())
+                    .contentType(contentType)
+                    .size(file.getSize())
+                    .uploadTimestamp(Instant.now())
+                    .build();
+        }
+        catch (IOException e){
+            throw new RuntimeException("Failed to store media", e);
+        }
+    }
+}

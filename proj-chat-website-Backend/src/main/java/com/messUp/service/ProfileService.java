@@ -25,8 +25,6 @@ public class ProfileService {
 
     public UserDTO updateProfile(UserDTO profile, String name) {
         User user= userService.getUserByUsername(name);
-        user.setProfilePicture(profile.getProfilePicture());
-        user.setProfilePictureContentType(profile.getProfilePictureContentType());
         user.setFirstName(profile.getFirstName());
         user.setLastName(profile.getLastName());
         user.setPhoneNumber(profile.getPhoneNumber());
@@ -34,6 +32,17 @@ public class ProfileService {
         userService.saveUser(user);
         return userService.mapToDTO(user);
     }
+
+    public void updateProfilePicture(User user, byte[] image, String contentType) {
+        user.setProfilePicture(image);
+        user.setProfilePictureContentType(contentType);
+        userService.saveUser(user);
+    }
+
+    public byte[] getProfilePicture(User user) {
+        return user.getProfilePicture();
+    }
+
 
     public void setEmail(String newEmail, User user) {
 

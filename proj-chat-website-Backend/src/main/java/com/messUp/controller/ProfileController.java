@@ -5,8 +5,11 @@ import com.messUp.DTO.UserDTO;
 import com.messUp.entity.User;
 import com.messUp.service.ProfileService;
 import com.messUp.service.UserService;
+import org.springframework.http.HttpHeaders;
+import org.springframework.http.MediaType;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.*;
+import org.springframework.web.multipart.MultipartFile;
 
 import java.security.Principal;
 
@@ -48,6 +51,48 @@ public class ProfileController {
             return ResponseEntity.badRequest().body("Error updating email: " + e.getMessage());
         }
     }
+
+    @PostMapping("/picture")
+    public ResponseEntity<?> uploadProfilePicture(
+            @RequestParam("file") MultipartFile file,
+            Principal principal) {
+
+        try {
+            User user = userService.getUserByUsername(principal.getName());
+
+            profileService.updateProfilePicture(
+                    user,
+                    file.getBytes(),
+                    file.getContentType()
+            );
+
+            return ResponseEntity.ok("Profile picture updated");
+
+        } catch (Exception e) {
+            return ResponseEntity.badRequest().body("Upload failed: " + e.getMessage());
+        }
+    }
+
+    @GetMapping("/picture/{username}")
+    public ResponseEntity<?> getProfilePicture(@PathVariable String username) {
+
+        try {
+            User user = userService.getUserByUsername(username);
+
+            if (user.getProfilePicture() == null)
+                return ResponseEntity.notFound().build();
+
+            return ResponseEntity.ok()
+                    .contentType(MediaType.parseMediaType(user.getProfilePictureContentType()))
+                    .header(HttpHeaders.CACHE_CONTROL, "max-age=86400")
+                    .body(user.getProfilePicture());
+
+        } catch (Exception e) {
+            return ResponseEntity.notFound().build();
+        }
+    }
+
+
     @PostMapping("/verify/email-otp")
     public ResponseEntity<?> verifyEmailOtp(@RequestParam String otp, Principal principal) {
         try {

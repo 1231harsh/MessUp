@@ -15,6 +15,26 @@ const NotificationDropdown = () => {
   const pollingIntervalRef = useRef(null);
   const lastFetchedNotifications = useRef(new Set()); // Track last fetched notification IDs
   const hasInitialLoad = useRef(false); // Track if initial load is complete
+  const isOpenRef = useRef(false);
+  const notificationsRef = useRef([]);
+  const shownNotificationsRef = useRef(new Set());
+  const userCacheRef = useRef({});
+
+  useEffect(() => {
+    isOpenRef.current = isOpen;
+  }, [isOpen]);
+
+  useEffect(() => {
+    notificationsRef.current = notifications;
+  }, [notifications]);
+
+  useEffect(() => {
+    shownNotificationsRef.current = shownNotifications;
+  }, [shownNotifications]);
+
+  useEffect(() => {
+    userCacheRef.current = userCache;
+  }, [userCache]);
 
   useEffect(() => {
     const handleClickOutside = (event) => {
@@ -65,8 +85,8 @@ const NotificationDropdown = () => {
   }, [notifications]);
 
   const fetchUserDetails = async (userId) => {
-    if (userCache[userId]) {
-      return userCache[userId];
+    if (userCacheRef.current[userId]) {
+      return userCacheRef.current[userId];
     }
 
     try {
@@ -78,6 +98,10 @@ const NotificationDropdown = () => {
         ...prev,
         [userId]: userDetails
       }));
+      userCacheRef.current = {
+        ...userCacheRef.current,
+        [userId]: userDetails
+      };
       return userDetails;
     } catch (error) {
       console.error('Failed to fetch user details for ID:', userId, error);
@@ -94,6 +118,10 @@ const NotificationDropdown = () => {
         ...prev,
         [userId]: fallbackUser
       }));
+      userCacheRef.current = {
+        ...userCacheRef.current,
+        [userId]: fallbackUser
+      };
 
       return fallbackUser;
     }
@@ -101,7 +129,7 @@ const NotificationDropdown = () => {
 
   const fetchNotifications = async () => {
     // Only show loading spinner if dropdown is open and no notifications exist
-    if (isOpen && notifications.length === 0) {
+    if (isOpenRef.current && notificationsRef.current.length === 0) {
       setIsLoading(true);
     }
 
@@ -144,7 +172,7 @@ const NotificationDropdown = () => {
       if (hasInitialLoad.current) {
         // Find truly new notifications (not in previous fetch AND not already shown)
         const newNotifications = notificationsWithSenderDetails.filter(
-          n => !lastFetchedNotifications.current.has(n.id) && !shownNotifications.has(n.id)
+          n => !lastFetchedNotifications.current.has(n.id) && !shownNotificationsRef.current.has(n.id)
         );
 
         // Show toast for new friend requests
@@ -165,6 +193,7 @@ const NotificationDropdown = () => {
           setShownNotifications(prev => {
             const newSet = new Set(prev);
             newNotifications.forEach(n => newSet.add(n.id));
+            shownNotificationsRef.current = newSet;
             return newSet;
           });
         }
@@ -177,6 +206,7 @@ const NotificationDropdown = () => {
           setShownNotifications(prev => {
             const newSet = new Set(prev);
             notificationsWithSenderDetails.forEach(n => newSet.add(n.id));
+            shownNotificationsRef.current = newSet;
             return newSet;
           });
         }
@@ -189,12 +219,12 @@ const NotificationDropdown = () => {
     } catch (error) {
       console.error('Failed to fetch notifications:', error.response?.data || error.message);
       // Only show error toast if dropdown is open to avoid spam
-      if (isOpen && notifications.length === 0) {
+      if (isOpenRef.current && notificationsRef.current.length === 0) {
         toast.error('Failed to fetch notifications');
       }
       setNotifications([]);
     } finally {
-      if (isOpen) {
+      if (isOpenRef.current) {
         setIsLoading(false);
       }
     }

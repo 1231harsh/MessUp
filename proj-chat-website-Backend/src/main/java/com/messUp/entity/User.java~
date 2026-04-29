@@ -36,7 +36,7 @@ public class User {
 
     @Lob
     @Basic(fetch = FetchType.LAZY)
-    @Column(name = "profile_picture", columnDefinition = "LONGBLOB")
+    @Column(name = "profile_picture",columnDefinition = "BYTEA")
     private byte[] profilePicture;
 
     @Column(name = "profile_picture_content_type", length = 50)
@@ -56,7 +56,7 @@ public class User {
     private String pendingEmail;
 
     @Column(name = "email_change_otp", length = 200)
-    private String emailChangeOtp;     
+    private String emailChangeOtp;
 
     private LocalDateTime emailChangeOtpExpiresAt;
 

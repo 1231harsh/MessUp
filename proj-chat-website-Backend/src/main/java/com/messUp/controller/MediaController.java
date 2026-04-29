@@ -1,0 +1,50 @@
+package com.messUp.controller;
+
+import com.messUp.entity.Media;
+import com.messUp.service.MediaService;
+import org.springframework.http.HttpHeaders;
+import org.springframework.http.MediaType;
+import org.springframework.http.ResponseEntity;
+import org.springframework.web.bind.annotation.*;
+import org.springframework.web.multipart.MultipartFile;
+
+import java.security.Principal;
+import java.util.Map;
+
+@RestController
+@RequestMapping("/api/media")
+public class MediaController {
+
+    private final MediaService mediaService;
+
+    public MediaController(MediaService mediaService) {
+        this.mediaService = mediaService;
+    }
+
+    @PostMapping("/images")
+    public ResponseEntity<?> uploadMessageImage(@RequestParam("file") MultipartFile file,
+                                                @RequestParam("receiverId") String receiverId,
+                                                @RequestParam("contentType") String contentType,
+                                                Principal principal) {
+        String senderId= principal.getName();
+        String mediaId = mediaService.storeEncryptedImage(
+                file,
+                receiverId,
+                senderId,
+                contentType
+        );
+        return ResponseEntity.ok(Map.of("mediaId", mediaId));
+
+    }
+
+    @GetMapping("/images/{mediaId}")
+    public ResponseEntity<?> getMessageImage(@PathVariable String mediaId, Principal principal) {
+        String userId = principal.getName();
+        Media imageData = mediaService.getMedia(mediaId, userId);
+        return ResponseEntity.ok()
+                .contentType(MediaType.APPLICATION_OCTET_STREAM)
+                .header("X-encrypted", "true")
+                .header(HttpHeaders.CONTENT_DISPOSITION, "attachment; filename=\"" + mediaId + "\"")
+                .body(imageData.getEncryptedData());
+    }
+}

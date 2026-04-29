@@ -22,5 +22,8 @@ public class GroupMessage {
     @Column(columnDefinition = "TEXT")
     private String message;
 
+    @Column(columnDefinition = "TEXT")
+    private String iv;
+
     private LocalDateTime timestamp = LocalDateTime.now();
 }

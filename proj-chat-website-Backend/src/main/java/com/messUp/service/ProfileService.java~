@@ -3,9 +3,11 @@ package com.messUp.service;
 import com.messUp.DTO.UserDTO;
 import com.messUp.Utils.OtpGenerator;
 import com.messUp.entity.User;
+import org.springframework.stereotype.Service;
 
 import java.time.LocalDateTime;
 
+@Service
 public class ProfileService {
     private final UserService userService;
     private final EmailService emailService;
@@ -23,8 +25,6 @@ public class ProfileService {
 
     public UserDTO updateProfile(UserDTO profile, String name) {
         User user= userService.getUserByUsername(name);
-        user.setProfilePicture(profile.getProfilePicture());
-        user.setProfilePictureContentType(profile.getProfilePictureContentType());
         user.setFirstName(profile.getFirstName());
         user.setLastName(profile.getLastName());
         user.setPhoneNumber(profile.getPhoneNumber());

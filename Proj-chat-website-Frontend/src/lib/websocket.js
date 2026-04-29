@@ -1,5 +1,5 @@
 import SockJS from "sockjs-client";
-import Stomp from "stompjs";
+import { Stomp } from "@stomp/stompjs";
 import encryptionService from "./encryption";
 const API_BASE_URL = import.meta.env.VITE_BASE_URL;
 
@@ -54,24 +54,16 @@ class WebSocketService {
       console.warn("⚠️ Cannot subscribe: not connected");
       return;
     }
-
-    // // Check if connection is really ready
-    // if (!this.stompClient.connected) {
-    //   console.warn("⚠️ STOMP client not fully connected yet, retrying...");
-    //   setTimeout(() => this.subscribeToPrivateMessages(username), 200);
-    //   return;
-    // }
-
     try {
       const destinations = [
         `/user/${username}/private`, // incoming messages
-        `/user/${username}/private/sent`, 
+        `/user/${username}/private/sent`,
         `/user/${username}/private/delivered`, // delivery updates for messages I sent
         `/user/${username}/private/read`, // read updates
       ];
 
       destinations.forEach((dest) => {
-        if(this.subscriptions.has(dest)) return;
+        if (this.subscriptions.has(dest)) return;
 
         console.log("📡 Subscribing to:", dest);
 
@@ -101,55 +93,65 @@ class WebSocketService {
     }
   }
 
-  async sendPrivateMessage(sender, receiver, message, tempId) {
+  async sendPrivateMessage(
+    sender,
+    receiver,
+    message, // string | null
+    tempId,
+    mediaPayload = null // 👈 NEW (for images)
+  ) {
     if (!this.stompClient || !this.connected) {
       throw new Error("Not connected to WebSocket");
     }
 
-    // Double check connection state
     if (!this.stompClient.connected) {
       throw new Error("WebSocket connection not ready");
     }
 
     try {
-      console.log("🔐 Attempting to encrypt message before sending...");
+      let payload = {
+        sender,
+        receiver,
+        tempId,
+      };
 
-      // Try to encrypt the message
-      const encryptedMessage = await encryptionService.encryptMessage(
-        message,
-        receiver
-      );
+      // 🔐 TEXT MESSAGE
+      if (message) {
+        console.log("🔐 Encrypting text message…");
 
-      let payload;
+        const encryptedMessage = await encryptionService.encryptMessage(
+          message,
+          receiver
+        );
 
-      if (encryptedMessage) {
-        // Send encrypted message
+        if (!encryptedMessage) {
+          throw new Error("Text encryption failed");
+        }
+
         payload = {
-          sender: sender,
-          receiver: receiver,
-          message: encryptedMessage, // This is the encrypted JSON string
+          ...payload,
+          message: encryptedMessage,
           isEncrypted: true,
-          tempId: tempId,
         };
-        console.log("📤 Sending encrypted message");
-      } 
-      // else {
-      //   // Fallback: send unencrypted if encryption fails
-      //   console.warn("⚠️ Encryption failed, sending unencrypted message");
-      //   payload = {
-      //     sender: sender,
-      //     receiver: receiver,
-      //     message: message,
-      //     isEncrypted: false,
-      //   };
-      // }
+      }
+
+      // 🔐 IMAGE MESSAGE (NO encryption here – already encrypted)
+      if (mediaPayload) {
+        payload = {
+          ...payload,
+          message: null,
+          isEncrypted: true,
+          ...mediaPayload,
+        };
+      }
 
       this.stompClient.send(
         "/app/sendPrivateMessage",
         {},
         JSON.stringify(payload)
       );
-      console.log("✅ Message sent to backend");
+
+      console.log("✅ WebSocket payload sent:", payload);
     } catch (error) {
       console.error("❌ Failed to send message:", error);
       throw error;

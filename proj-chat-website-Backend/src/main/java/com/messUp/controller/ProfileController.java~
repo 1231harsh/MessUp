@@ -7,6 +7,7 @@ import com.messUp.service.ProfileService;
 import com.messUp.service.UserService;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.*;
+import org.springframework.web.multipart.MultipartFile;
 
 import java.security.Principal;
 
@@ -48,8 +49,31 @@ public class ProfileController {
             return ResponseEntity.badRequest().body("Error updating email: " + e.getMessage());
         }
     }
+
+    @PostMapping("/picture")
+    public ResponseEntity<?> uploadProfilePicture(
+            @RequestParam("file") MultipartFile file,
+            Principal principal) {
+
+        try {
+            User user = userService.getUserByUsername(principal.getName());
+
+            profileService.updateProfilePicture(
+                    user,
+                    file.getBytes(),
+                    file.getContentType()
+            );
+
+            return ResponseEntity.ok("Profile picture updated");
+
+        } catch (Exception e) {
+            return ResponseEntity.badRequest().body("Upload failed: " + e.getMessage());
+        }
+    }
+
+
     @PostMapping("/verify/email-otp")
-    public ResponseEntity<> verifyEmailOtp(@RequestParam String otp, Principal principal) {
+    public ResponseEntity<?> verifyEmailOtp(@RequestParam String otp, Principal principal) {
         try {
             User user = userService.getUserByUsername(principal.getName());
             profileService.verifyEmailOtp(otp, user);

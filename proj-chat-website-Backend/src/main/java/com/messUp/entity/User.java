@@ -2,6 +2,8 @@ package com.messUp.entity;
 
 import jakarta.persistence.*;
 import lombok.Data;
+import org.hibernate.annotations.JdbcTypeCode;
+import org.hibernate.type.SqlTypes;
 
 import java.time.LocalDateTime;
 
@@ -34,9 +36,8 @@ public class User {
     @Column(name = "last_name", length = 50)
     private String lastName;
 
-    @Lob
-    @Basic(fetch = FetchType.LAZY)
-    @Column(name = "profile_picture", columnDefinition = "LONGBLOB")
+    @JdbcTypeCode(SqlTypes.BINARY)
+    @Column(name = "profile_picture")
     private byte[] profilePicture;
 
     @Column(name = "profile_picture_content_type", length = 50)

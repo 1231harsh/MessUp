@@ -4,20 +4,22 @@ import { getCurrentUser, getOldChatMessages } from "../lib/api";
 import encryptionService from "../lib/encryption";
 import { useAuthStore } from "./useAuthStore";
 
+const API_BASE_URL = import.meta.env.VITE_BASE_URL;
+
 const useChatStore = create((set, get) => ({
-  // State
-  messages: {}, // { username: [msg1, msg2, ...] }
-  messageStatuses: {}, // { messageId: 'SENT' | 'DELIVERED' | 'READ' }
+  /* ================= STATE ================= */
+  messages: {},
+  messageStatuses: {},
   selectedUser: null,
   isConnected: false,
   isLoading: false,
   currentUser: null,
   loadingOldMessages: {},
 
-  // Initialize WebSocket and encryption
+  /* ================= INIT ================= */
   initializeWebSocket: async () => {
     const { isAuthenticated } = useAuthStore.getState();
-    if (!isAuthenticated) return;
+    if (!isAuthenticated) return false;
 
     try {
       const currentUser = await getCurrentUser();
@@ -30,120 +32,130 @@ const useChatStore = create((set, get) => ({
 
       webSocketService.addMessageHandler(
         "chatStore",
-        get().handleIncomingMessage
+        get().handleIncomingMessage,
       );
 
       set({ isConnected: true, isLoading: false });
       return true;
-    } catch (error) {
-      console.error("WebSocket init failed:", error);
+    } catch (err) {
+      console.error("WS init failed:", err);
       set({ isConnected: false, isLoading: false });
       return false;
     }
   },
 
-  // Disconnect
   disconnectWebSocket: () => {
     webSocketService.removeMessageHandler("chatStore");
     webSocketService.disconnect();
     set({ isConnected: false });
   },
 
-  // Load old messages
+  /* ================= HISTORY ================= */
   loadOldMessages: async (username) => {
-    const { loadingOldMessages } = get();
-    if (loadingOldMessages[username]) return;
+    if (get().loadingOldMessages[username]) return;
 
-    set((state) => ({
-      loadingOldMessages: { ...state.loadingOldMessages, [username]: true },
+    set((s) => ({
+      loadingOldMessages: { ...s.loadingOldMessages, [username]: true },
     }));
 
     try {
       const oldMessages = await getOldChatMessages(username);
 
-      const processedMessages = await Promise.all(
-        oldMessages.map(async (msg, index) => {
+      const processed = await Promise.all(
+        oldMessages.map(async (msg) => {
           let text = msg.text || "[Empty message]";
           let isEncrypted = false;
           let decryptionFailed = false;
 
           if (msg.text && encryptionService.isEncryptedMessage(msg.text)) {
             try {
-              const decrypted = await encryptionService.decryptMessage(
-                msg.text
-              );
-              if (decrypted) text = decrypted;
+              text = await encryptionService.decryptMessage(msg.text);
               isEncrypted = true;
-            } catch (e) {
+            } catch {
               text = "[Message could not be decrypted]";
               isEncrypted = true;
               decryptionFailed = true;
             }
           }
 
-          const status = msg.status || "SENT";
-
-          return { ...msg, text, isEncrypted, decryptionFailed,status};
-        })
+          return {
+            ...msg,
+            text,
+            isEncrypted,
+            decryptionFailed,
+            status: msg.status || "SENT",
+          };
+        }),
       );
 
-      processedMessages.sort(
-        (a, b) => new Date(a.createdAt) - new Date(b.createdAt)
-      );
+      set((state) => {
+        const existing = state.messages[username] || [];
+        const map = new Map();
 
-      set((state) => ({
-        messages: { ...state.messages, [username]: processedMessages },
-        loadingOldMessages: { ...state.loadingOldMessages, [username]: false },
-      }));
+        [...processed, ...existing].forEach((m) => map.set(m._id, m));
 
-      return processedMessages;
-    } catch (error) {
-      console.error("Failed to load old messages:", error);
-      set((state) => ({
-        loadingOldMessages: { ...state.loadingOldMessages, [username]: false },
+        const merged = [...map.values()].sort(
+          (a, b) => new Date(a.createdAt) - new Date(b.createdAt),
+        );
+
+        return {
+          messages: { ...state.messages, [username]: merged },
+          loadingOldMessages: {
+            ...state.loadingOldMessages,
+            [username]: false,
+          },
+        };
+      });
+    } catch (e) {
+      console.error("Load history failed:", e);
+      set((s) => ({
+        loadingOldMessages: { ...s.loadingOldMessages, [username]: false },
       }));
-      return [];
     }
   },
 
-  // Select a user
+  /* ================= USER SELECT ================= */
   selectUser: async (user) => {
     set({ selectedUser: user });
-    const { messages } = get();
-    if (!messages[user.username] || messages[user.username].length === 0) {
+
+    const msgs = get().messages[user.username];
+    if (!msgs || msgs.length === 0) {
       await get().loadOldMessages(user.username);
     }
+
+    // mark messages as READ locally
+    set((state) => {
+      const updated = (state.messages[user.username] || []).map((m) =>
+        m.senderId !== state.currentUser?.username
+          ? { ...m, status: "READ" }
+          : m,
+      );
+
+      return {
+        messages: { ...state.messages, [user.username]: updated },
+      };
+    });
   },
 
-  // Send a message
+  /* ================= SEND ================= */
   sendMessage: async (text, image = null) => {
     const { selectedUser, currentUser } = get();
-    if (
-      !selectedUser ||
-      !currentUser ||
-      !text.trim() ||
-      !webSocketService.isConnected()
-    ) {
-      console.log("❌ Cannot send: missing user, text, or not connected");
-      return false;
-    }
+    if (!selectedUser || !currentUser || (!text.trim() && !image)) return false;
+    if (!webSocketService.isConnected()) return false;
 
-    const tempMessageId = `temp-${Date.now()}-${Math.random()
-      .toString(36)
-      .substr(2, 9)}`;
-    console.log(tempMessageId,"This is tempMessageId");
+    const tempId = `temp-${Date.now()}-${Math.random()}`;
+
     const tempMessage = {
-      _id: tempMessageId,
-      clientId: tempMessageId,
+      _id: tempId,
+      clientId: tempId,
       senderId: currentUser.username,
       receiverId: selectedUser.username,
-      text,
+      text: image ? null : text,
+      mediaType: image ? "IMAGE" : null,
       createdAt: new Date().toISOString(),
       isTemp: true,
       status: "SENDING",
     };
-
-    console.log("📤 Adding temp message:", tempMessage);
 
     set((state) => ({
       messages: {
@@ -153,187 +165,183 @@ const useChatStore = create((set, get) => ({
           tempMessage,
         ],
       },
-      messageStatuses: { ...state.messageStatuses, [tempMessageId]: "SENDING" },
+      messageStatuses: {
+        ...state.messageStatuses,
+        [tempId]: "SENDING",
+      },
     }));
 
     try {
-      await webSocketService.sendPrivateMessage(
-        currentUser.username,
-        selectedUser.username,
-        text,
-        tempMessageId
-      );
-      console.log("✅ Message sent to backend, waiting for confirmation");
+      if (image) {
+        const encrypted = await encryptionService.encryptImage(
+          image,
+          selectedUser.username,
+        );
+
+        const fd = new FormData();
+        fd.append("file", encrypted.encryptedBlob);
+        fd.append("receiverId", selectedUser.username);
+        fd.append("contentType", encrypted.originalContentType);
+
+        const res = await fetch(`${API_BASE_URL}/api/media/images`, {
+          method: "POST",
+          body: fd,
+          credentials: "include",
+        });
+
+        const { mediaId } = await res.json();
+
+        await webSocketService.sendPrivateMessage(
+          currentUser.username,
+          selectedUser.username,
+          null,
+          tempId,
+          {
+            mediaType: "IMAGE",
+            mediaId,
+            encryptedKeyForRecipient: encrypted.encryptedKeyForRecipient,
+            encryptedKeyForSender: encrypted.encryptedKeyForSender,
+            iv: encrypted.iv,
+            contentType: encrypted.originalContentType,
+          },
+        );
+      } else {
+        await webSocketService.sendPrivateMessage(
+          currentUser.username,
+          selectedUser.username,
+          text,
+          tempId,
+        );
+      }
+
       return true;
-    } catch (error) {
-      console.error("❌ Send failed:", error);
-      get().updateMessageStatus(selectedUser.username, tempMessageId, "FAILED");
+    } catch {
+      get().updateMessageStatus(
+        selectedUser.username,
+        tempId,
+        "FAILED",
+        tempId,
+      );
       return false;
     }
   },
 
-  // Handle incoming message
-  handleIncomingMessage: async (messageData) => {
+  /* ================= INCOMING ================= */
+  handleIncomingMessage: async (data) => {
     const { currentUser } = get();
     if (!currentUser) return;
 
-    console.log("📨 Incoming message:", messageData);
-
-    const { type } = messageData; // "private", "delivered", "read"
     const otherUser =
-      messageData.sender === currentUser.username
-        ? messageData.receiver
-        : messageData.sender;
+      data.sender === currentUser.username ? data.receiver : data.sender;
 
-    if (type === "sent") {
-      let text = messageData.message;
-      let isEncrypted = false;
-      let decryptionFailed = false;
+    if (data.type === "private" || data.type === "sent") {
+      const incomingTempId = data.clientId || data.tempId;
 
-      console.log("00000000000000000000000000000000inside00000000000000000000000000000000");
-      if (text && encryptionService.isEncryptedMessage(text)) {
-        try {
-          const decrypted = await encryptionService.decryptMessage(text);
-          text = decrypted || "[Message could not be decrypted]";
-          isEncrypted = true;
-        } catch {
-          text = "[Message could not be decrypted]";
-          isEncrypted = true;
-          decryptionFailed = true;
-        }
-      }
-
-      const formattedMessage = {
-        _id: messageData.messageId,
-        senderId: messageData.sender,
-        receiverId: messageData.receiver,
-        text,
-        createdAt: messageData.timestamp || new Date().toISOString(),
+      const base = {
+        _id: data.messageId,
+        clientId: incomingTempId,
+        senderId: data.sender,
+        receiverId: data.receiver,
+        createdAt: data.timestamp || new Date().toISOString(),
         status: "SENT",
-        isEncrypted,
-        decryptionFailed,
+        isTemp: false,
       };
 
-      console.log("💬 Formatted message:", formattedMessage);
+      let message = base;
+
+      if (data.mediaType === "IMAGE") {
+        message = {
+          ...base,
+          mediaType: "IMAGE",
+          mediaId: data.mediaId,
+          iv: data.iv,
+          encryptedKeyForRecipient: data.encryptedKeyForRecipient,
+          encryptedKeyForSender: data.encryptedKeyForSender,
+          contentType: data.contentType,
+        };
+      } else {
+        let text = data.message;
+        if (text && encryptionService.isEncryptedMessage(text)) {
+          try {
+            text = await encryptionService.decryptMessage(text);
+          } catch {
+            text = "[Message could not be decrypted]";
+          }
+        }
+        message = { ...base, text };
+      }
 
       set((state) => {
-        const existing = state.messages[otherUser] || [];
+        const existing = [...(state.messages[otherUser] || [])];
 
-        const tempIndex = existing.findIndex(
-          (m) =>
-            m.isTemp &&
-            m.clientId &&
-            messageData.clientId &&
-            m.clientId === messageData.clientId
+        const idx = existing.findIndex(
+          (m) => m.isTemp && m.clientId === incomingTempId,
         );
 
-        let newMessages;
-        if (tempIndex !== -1) {
-          console.log("🔄 Replacing temp message at index", tempIndex);
-          existing[tempIndex] = { ...formattedMessage, isTemp: false };
-          newMessages = [...existing];
+        if (idx !== -1) {
+          const old = existing[idx];
+          existing[idx] = { ...message, createdAt: old.createdAt };
         } else {
-          const filtered = existing.filter((msg) => {
-            const isDuplicate =
-              msg.senderId === formattedMessage.senderId &&
-              msg.text === formattedMessage.text &&
-              Math.abs(
-                new Date(msg.createdAt) - new Date(formattedMessage.createdAt)
-              ) < 2000;
-            return !isDuplicate;
-          });
-          newMessages = [...filtered, formattedMessage];
+          existing.push(message);
         }
 
-        const newMessageStatuses = {
-          ...state.messageStatuses,
-          [formattedMessage._id]: formattedMessage.status,
-        };
-
-        console.log("📊 Updated messages for", otherUser, newMessages);
-        console.log("📊 Updated messageStatuses:", newMessageStatuses);
+        const statuses = { ...state.messageStatuses };
+        if (incomingTempId) delete statuses[incomingTempId];
+        statuses[message._id] = "SENT";
 
         return {
-          messages: { ...state.messages, [otherUser]: newMessages },
-          messageStatuses: newMessageStatuses,
+          messages: { ...state.messages, [otherUser]: existing },
+          messageStatuses: statuses,
         };
       });
-    } else if (type === "delivered" || type === "read") {
-      console.log(
-        `🔔 Updating message status to ${type.toUpperCase()} for messageId:`,
-        messageData.messageId
-      );
-      console.log(messageData.tempId,"Line 263");
+    }
+
+    if (data.type === "delivered" || data.type === "read") {
       get().updateMessageStatus(
         otherUser,
-        messageData.messageId,
-        type.toUpperCase(),
-        messageData.message,
-        messageData.tempId
+        data.messageId,
+        data.type.toUpperCase(),
+        data.tempId,
       );
     }
   },
 
-  // Update message status manually
-  updateMessageStatus: (username, messageId, status, messageText, tempId) => {
+  /* ================= STATUS ================= */
+  updateMessageStatus: (username, messageId, status, tempId) => {
     set((state) => {
-      const msgs = state.messages[username] || [];
-      console.log(
-        "🔄 Updating status. username:",
-        username,
-        "messageId:",
-        messageId,
-        "status:",
-        status,
-        "messageText:",
-        messageText,
-        "tempId:",
-        tempId
+      const msgs = [...(state.messages[username] || [])];
+      const idx = msgs.findIndex(
+        (m) => m._id === messageId || (tempId && m.clientId === tempId),
       );
 
-
-      console.log(tempId);
-
-      const index = msgs.findIndex(
-        (m) =>
-          m._id === messageId ||
-          (m.isTemp && m.text === messageText) ||
-          (m.isTemp && tempId && m.clientId === tempId)
-      );
-
-      if (index !== -1) {
-        console.log("✅ Found message to update at index", index);
-        msgs[index] = { ...msgs[index], _id: messageId, status, isTemp: false };
-      } else {
-        console.warn(
-          "⚠️ Could not find message to update with ID or text match"
-        );
+      if (idx !== -1) {
+        msgs[idx] = { ...msgs[idx], _id: messageId, status, isTemp: false };
       }
 
-      const newMessageStatuses = {
-        ...state.messageStatuses,
-        [messageId]: status,
-      };
+      const statuses = { ...state.messageStatuses };
+      if (tempId) delete statuses[tempId];
+      statuses[messageId] = status;
+
       return {
         messages: { ...state.messages, [username]: msgs },
-        messageStatuses: newMessageStatuses,
+        messageStatuses: statuses,
       };
     });
   },
 
-  // Getters
-  getMessagesForUser: (username) => get().messages[username] || [],
-  getLastMessageForUser: (username) => {
-    const messages = get().getMessagesForUser(username);
-    return messages.length ? messages[messages.length - 1] : null;
+  /* ================= GETTERS ================= */
+  getMessagesForUser: (u) => get().messages[u] || [],
+  getLastMessageForUser: (u) => {
+    const m = get().messages[u] || [];
+    return m[m.length - 1] || null;
   },
-  getUnreadCountForUser: (username) => {
+  getUnreadCountForUser: (u) => {
     const { messages, currentUser } = get();
-    return (messages[username] || []).filter(
-      (msg) => msg.senderId !== currentUser?.username && msg.status !== "READ"
+    return (messages[u] || []).filter(
+      (m) => m.senderId !== currentUser?.username && m.status !== "READ",
     ).length;
   },
-  getMessageStatus: (messageId) => get().messageStatuses[messageId] || "SENT",
+  getMessageStatus: (id) => get().messageStatuses[id] || "SENT",
   isLoadingOldMessages: (username) =>
     get().loadingOldMessages[username] || false,
 }));
